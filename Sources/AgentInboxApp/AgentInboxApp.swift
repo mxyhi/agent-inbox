@@ -15,7 +15,7 @@ struct AgentInboxApp: App {
                 }
             )
         } label: {
-            Label("Agent Inbox", systemImage: appDelegate.viewModel.menuBarSystemImage)
+            MenuBarLabel(viewModel: appDelegate.viewModel)
         }
         .menuBarExtraStyle(.menu)
 
@@ -53,5 +53,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func togglePanel() {
         panelController?.toggleVisibility()
+    }
+}
+
+/// 菜单栏入口标签必须直接观察 ViewModel,否则 MenuBarExtra label 可能不会跟随 snapshot 立即重绘。
+private struct MenuBarLabel: View {
+    @ObservedObject var viewModel: AppViewModel
+
+    var body: some View {
+        Label("Agent Inbox", systemImage: viewModel.menuBarSystemImage)
     }
 }
