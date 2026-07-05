@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import AgentInboxCore
 import OSLog
@@ -101,6 +102,24 @@ final class AppViewModel: ObservableObject {
 
         Task {
             await stateStore.save(persistedState)
+        }
+    }
+
+    /// 打开会话工作目录(焦点卡「打开↗」)—— cwd 缺失时退化为在 Finder 中定位 rollout 文件
+    func openSession(id: String) {
+        guard let session = snapshot.todos.first(where: { $0.id == id })
+            ?? snapshot.running.first(where: { $0.id == id }) else {
+            logger.warning("openSession 未找到会话: \(id, privacy: .public)")
+            return
+        }
+
+        if let cwd = session.cwd, !cwd.isEmpty {
+            NSWorkspace.shared.open(URL(filePath: cwd))
+            logger.info("打开会话目录: \(cwd, privacy: .public)")
+        } else {
+            // cwd 缺失:在 Finder 中高亮 rollout 文件本身,至少能定位到会话
+            NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: session.filePath)])
+            logger.info("cwd 缺失,Finder 定位 rollout: \(session.filePath, privacy: .public)")
         }
     }
 

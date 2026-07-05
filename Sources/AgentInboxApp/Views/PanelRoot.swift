@@ -39,9 +39,11 @@ struct PanelRoot: View {
             IdleCapsule(hasHistory: viewModel.snapshot.hasCompletedHistory)
                 .transition(.opacity)
         } else {
-            SessionList(snapshot: viewModel.snapshot) { id in
-                viewModel.completeTodo(id: id)
-            }
+            SessionList(
+                snapshot: viewModel.snapshot,
+                onComplete: { viewModel.completeTodo(id: $0) },
+                onOpen: { viewModel.openSession(id: $0) }
+            )
             .transition(.opacity)
         }
     }
@@ -131,23 +133,33 @@ struct IdleCapsule: View {
 // MARK: - 会话列表
 
 /// 会话列表 —— 待办优先(需要行动),运行中次之(纯感知)
-/// 各区最多展示 3 条,溢出折叠为提示行,防止面板无限长高。
+/// 首个待办渲染为「焦点卡」(带问/答摘要 + 行动),其余待办单行素行;各区最多 3 条,溢出折叠。
 struct SessionList: View {
     let snapshot: AgentSnapshot
     let onComplete: (String) -> Void
+    let onOpen: (String) -> Void
 
     /// 每区展示上限
     private static let sectionLimit = 3
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            // 待办区:新完成的排前,仅首个显示消息摘要
+            // 待办区:新完成的排前;首个 = 焦点卡(问/答 + 行动),其余 = 单行素行
             ForEach(Array(snapshot.todos.prefix(Self.sectionLimit).enumerated()), id: \.element.id) { index, session in
-                TodoRow(
-                    session: session,
-                    showMessage: index == 0,
-                    onComplete: { onComplete(session.id) }
-                )
+                if index == 0 {
+                    FocusTodoCard(
+                        session: session,
+                        onOpen: { onOpen(session.id) },
+                        onComplete: { onComplete(session.id) }
+                    )
+                    // 卡下留白:仅当卡后面还有内容(更多待办 / 运行区)时才需要
+                    .padding(.bottom, hasContentBelowFocusCard ? DS.Metrics.focusCardGap : 0)
+                } else {
+                    TodoRow(
+                        session: session,
+                        onComplete: { onComplete(session.id) }
+                    )
+                }
             }
 
             if snapshot.todos.count > Self.sectionLimit {
@@ -172,6 +184,11 @@ struct SessionList: View {
         }
         .padding(DS.Metrics.panelPadding)
         .frame(width: DS.Metrics.listWidth)
+    }
+
+    /// 焦点卡后面是否还有内容:决定卡底是否需要留白
+    private var hasContentBelowFocusCard: Bool {
+        snapshot.todos.count > 1 || snapshot.isActive
     }
 }
 

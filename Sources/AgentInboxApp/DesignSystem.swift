@@ -22,6 +22,10 @@ enum DS {
         static let buttonIdle = Color.primary.opacity(0.08)
         /// 面板发丝描边(系统分隔线色,明暗自适应)
         static let hairline = Color(nsColor: .separatorColor)
+        /// 焦点卡填充 —— 待办语义色淡底,一眼归类为「需要你处理」
+        static let focusCardFill = todo.opacity(0.12)
+        /// 焦点卡描边 —— 待办色发丝线,浅/深壁纸下都立得住卡边界
+        static let focusCardStroke = todo.opacity(0.35)
     }
 
     // MARK: - 字体
@@ -37,6 +41,16 @@ enum DS {
         static let capsule = Font.system(size: 12, weight: .medium)
         /// 折叠提示(还有 N 个)—— 11pt
         static let overflow = Font.system(size: 11)
+        /// 焦点卡标题(项目名)—— 15pt Semibold,比普通行重一档
+        static let focusTitle = Font.system(size: 15, weight: .semibold)
+        /// 焦点卡「答」段(Codex 最后交付)—— 13pt,卡片主内容
+        static let focusAnswer = Font.system(size: 13)
+        /// 焦点卡「问」段(首个用户提示词)—— 12pt,任务由来
+        static let focusPrompt = Font.system(size: 12)
+        /// 问/答 段前缀图标(SF Symbol)字号 —— 10pt Semibold,符号随字号缩放
+        static let segmentTag = Font.system(size: 10, weight: .semibold)
+        /// 「打开」次按钮 —— 12pt Medium
+        static let actionOpen = Font.system(size: 12, weight: .medium)
     }
 
     // MARK: - 间距与圆角
@@ -63,6 +77,19 @@ enum DS {
         static let completeButtonSize: CGFloat = 22
         /// 屏幕边缘默认留白
         static let screenMargin: CGFloat = 16
+        /// 焦点卡圆角(层级夹在 rowRadius 7 与 panelRadius 16 之间)
+        static let focusCardRadius: CGFloat = 12
+        /// 焦点卡内边距(比普通行更松,制造呼吸)
+        static let focusCardPadH: CGFloat = 12
+        static let focusCardPadV: CGFloat = 10
+        /// 焦点卡与下方列表的间距
+        static let focusCardGap: CGFloat = 8
+        /// 段前缀标签与正文的间距
+        static let segmentTagSpacing: CGFloat = 6
+        /// 长按完成按钮框(容纳外圈进度环)
+        static let completeButtonFrame: CGFloat = 28
+        /// 长按进度环线宽
+        static let completeRingWidth: CGFloat = 2
     }
 
     // MARK: - 动画
@@ -77,5 +104,9 @@ enum DS {
         /// 待办涟漪:扩散时长 + 静止间歇
         static let rippleExpand: TimeInterval = 1.1
         static let rippleRest: TimeInterval = 1.4
+        /// 长按完成所需按住时长(防误触:短于此松手不触发)。1.0s 让进度环填充清晰可读、手感刻意克制
+        static let holdToComplete: TimeInterval = 1.0
+        /// 中途松手时进度环回抽/淡出时长
+        static let ringCancel: TimeInterval = 0.15
     }
 }
