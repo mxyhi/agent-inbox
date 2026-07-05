@@ -1,10 +1,10 @@
 #!/bin/bash
 
-echo "🚀 启动 m-todo 应用..."
+echo "🚀 启动 Agent Inbox 应用..."
 echo ""
 
 # 启动应用
-.build/arm64-apple-macosx/debug/m-todo > /tmp/m-todo.log 2>&1 &
+.build/arm64-apple-macosx/debug/agent-inbox > /tmp/agent-inbox.log 2>&1 &
 MPID=$!
 
 sleep 3
@@ -22,7 +22,7 @@ echo "   - ✅ (完成)"
 echo ""
 echo "2. 浮窗 (屏幕右上角)"
 echo "   应该看到一个 420×280 的窗口"
-echo "   标题: m-todo"
+echo "   标题: Agent Inbox"
 echo ""
 echo "💡 操作提示:"
 echo "   - 点击菜单栏图标可以看到菜单"
@@ -34,7 +34,7 @@ echo "   1. 检查 Mission Control (F3 或三指上滑)"
 echo "   2. 点击菜单栏图标手动显示"
 echo "   3. 检查系统设置 > 隐私与安全性 > 屏幕录制"
 echo ""
-echo "📋 日志文件: /tmp/m-todo.log"
+echo "📋 日志文件: /tmp/agent-inbox.log"
 echo ""
-echo "⏹️  停止应用: pkill m-todo"
+echo "⏹️  停止应用: pkill agent-inbox"
 echo ""
