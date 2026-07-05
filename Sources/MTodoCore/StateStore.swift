@@ -1,0 +1,288 @@
+import Foundation
+import OSLog
+import SQLite3
+
+public actor StateStore {
+    private let databaseURL: URL
+    private let fileManager: FileManager
+    private let logger = Logger(subsystem: "m-todo", category: "StateStore")
+
+    public init(
+        databaseURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/Application Support/m-todo/state.sqlite"),
+        fileManager: FileManager = .default
+    ) {
+        self.databaseURL = databaseURL
+        self.fileManager = fileManager
+    }
+
+    public func load() async -> PersistedState {
+        do {
+            let database = try openDatabase()
+            defer { sqlite3_close(database) }
+
+            try migrate(database)
+
+            let pinMode = try readPinMode(database) ?? .activeOrTodo
+            let trackingStartedAt = try ensureTrackingStartedAt(database)
+            let completedSessionIDs = try readCompletedSessionIDs(database)
+            let panelAnchor = try readPanelAnchor(database)
+            logger.info("Loaded SQLite state from \(self.databaseURL.path, privacy: .public)")
+
+            return PersistedState(
+                pinMode: pinMode,
+                completedSessionIDs: completedSessionIDs,
+                trackingStartedAt: trackingStartedAt,
+                panelAnchor: panelAnchor
+            )
+        } catch {
+            logger.error("Failed to load SQLite state, using default: \(String(describing: error), privacy: .public)")
+            return PersistedState()
+        }
+    }
+
+    public func save(_ state: PersistedState) async {
+        do {
+            let database = try openDatabase()
+            defer { sqlite3_close(database) }
+
+            try migrate(database)
+            try execute(database, "BEGIN IMMEDIATE TRANSACTION")
+            do {
+                try savePinMode(state.pinMode, database)
+                try saveTrackingStartedAt(state.trackingStartedAt, database)
+                try savePanelAnchor(state.panelAnchor, database)
+                try replaceCompletedSessions(state.completedSessionIDs, database)
+                try execute(database, "COMMIT")
+                logger.info("Saved SQLite state to \(self.databaseURL.path, privacy: .public)")
+            } catch {
+                try? execute(database, "ROLLBACK")
+                throw error
+            }
+        } catch {
+            logger.error("Failed to save SQLite state: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private func openDatabase() throws -> OpaquePointer {
+        try fileManager.createDirectory(
+            at: databaseURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        var database: OpaquePointer?
+        let result = sqlite3_open_v2(
+            databaseURL.path,
+            &database,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
+            nil
+        )
+
+        guard result == SQLITE_OK, let database else {
+            throw SQLiteStoreError.openFailed(message: String(cString: sqlite3_errmsg(database)))
+        }
+
+        try executeRaw(database, "PRAGMA journal_mode = WAL")
+        try executeRaw(database, "PRAGMA foreign_keys = ON")
+        return database
+    }
+
+    private func migrate(_ database: OpaquePointer) throws {
+        try executeRaw(database, """
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY NOT NULL,
+            value TEXT NOT NULL
+        )
+        """)
+
+        try executeRaw(database, """
+        CREATE TABLE IF NOT EXISTS completed_sessions (
+            session_id TEXT PRIMARY KEY NOT NULL,
+            completed_at REAL NOT NULL
+        )
+        """)
+    }
+
+    private func readPinMode(_ database: OpaquePointer) throws -> PinMode? {
+        try querySingleText(
+            database,
+            sql: "SELECT value FROM settings WHERE key = ?",
+            bindings: [.text("pin_mode")]
+        ).flatMap(PinMode.init(rawValue:))
+    }
+
+    private func readCompletedSessionIDs(_ database: OpaquePointer) throws -> Set<String> {
+        var statement: OpaquePointer?
+        let sql = "SELECT session_id FROM completed_sessions"
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw SQLiteStoreError.prepareFailed(message: String(cString: sqlite3_errmsg(database)))
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var ids: Set<String> = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let cString = sqlite3_column_text(statement, 0) else {
+                continue
+            }
+            ids.insert(String(cString: cString))
+        }
+        return ids
+    }
+
+    private func savePinMode(_ pinMode: PinMode, _ database: OpaquePointer) throws {
+        try execute(
+            database,
+            "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            bindings: [.text("pin_mode"), .text(pinMode.rawValue)]
+        )
+    }
+
+    /// 首次打开 app 时建立跟踪基线;基线前已完成的历史 rollout 不再刷成待办
+    private func ensureTrackingStartedAt(_ database: OpaquePointer) throws -> Date {
+        if let raw = try querySingleText(
+            database,
+            sql: "SELECT value FROM settings WHERE key = ?",
+            bindings: [.text("tracking_started_at")]
+        ), let epoch = TimeInterval(raw) {
+            return Date(timeIntervalSince1970: epoch)
+        }
+
+        let now = Date()
+        try saveTrackingStartedAt(now, database)
+        logger.info("Initialized tracking baseline at \(now.timeIntervalSince1970, privacy: .public)")
+        return now
+    }
+
+    private func saveTrackingStartedAt(_ date: Date, _ database: OpaquePointer) throws {
+        try execute(
+            database,
+            "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            bindings: [.text("tracking_started_at"), .text(String(date.timeIntervalSince1970))]
+        )
+    }
+
+    /// 读取浮窗锚点:settings 表 key = panel_anchor,value 为 "x,y"(两个 Double 逗号拼接)
+    private func readPanelAnchor(_ database: OpaquePointer) throws -> PanelAnchor? {
+        guard let raw = try querySingleText(
+            database,
+            sql: "SELECT value FROM settings WHERE key = ?",
+            bindings: [.text("panel_anchor")]
+        ) else {
+            return nil
+        }
+
+        let parts = raw.split(separator: ",")
+        guard parts.count == 2, let x = Double(parts[0]), let y = Double(parts[1]) else {
+            logger.warning("Ignoring malformed panel_anchor value: \(raw, privacy: .public)")
+            return nil
+        }
+        return PanelAnchor(topRightX: x, topRightY: y)
+    }
+
+    /// 写入浮窗锚点;nil 表示恢复默认位置,直接删除该行
+    private func savePanelAnchor(_ anchor: PanelAnchor?, _ database: OpaquePointer) throws {
+        guard let anchor else {
+            try execute(
+                database,
+                "DELETE FROM settings WHERE key = ?",
+                bindings: [.text("panel_anchor")]
+            )
+            return
+        }
+
+        // Swift 的 Double 文本表示保证 round-trip 精度,"x,y" 往返无损
+        try execute(
+            database,
+            "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            bindings: [.text("panel_anchor"), .text("\(anchor.topRightX),\(anchor.topRightY)")]
+        )
+    }
+
+    private func replaceCompletedSessions(_ ids: Set<String>, _ database: OpaquePointer) throws {
+        try execute(database, "DELETE FROM completed_sessions")
+
+        for id in ids {
+            try execute(
+                database,
+                "INSERT INTO completed_sessions(session_id, completed_at) VALUES (?, ?)",
+                bindings: [.text(id), .double(Date().timeIntervalSince1970)]
+            )
+        }
+    }
+
+    private func execute(_ database: OpaquePointer, _ sql: String, bindings: [SQLiteBinding] = []) throws {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw SQLiteStoreError.prepareFailed(message: String(cString: sqlite3_errmsg(database)))
+        }
+        defer { sqlite3_finalize(statement) }
+
+        try bind(bindings, to: statement, database: database)
+
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw SQLiteStoreError.executeFailed(message: String(cString: sqlite3_errmsg(database)))
+        }
+    }
+
+    private func querySingleText(
+        _ database: OpaquePointer,
+        sql: String,
+        bindings: [SQLiteBinding]
+    ) throws -> String? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw SQLiteStoreError.prepareFailed(message: String(cString: sqlite3_errmsg(database)))
+        }
+        defer { sqlite3_finalize(statement) }
+
+        try bind(bindings, to: statement, database: database)
+
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let cString = sqlite3_column_text(statement, 0) else {
+            return nil
+        }
+
+        return String(cString: cString)
+    }
+
+    private func bind(_ bindings: [SQLiteBinding], to statement: OpaquePointer?, database: OpaquePointer) throws {
+        for (index, binding) in bindings.enumerated() {
+            let position = Int32(index + 1)
+            let result = switch binding {
+            case let .text(value):
+                sqlite3_bind_text(statement, position, value, -1, sqliteTransient)
+            case let .double(value):
+                sqlite3_bind_double(statement, position, value)
+            }
+
+            guard result == SQLITE_OK else {
+                throw SQLiteStoreError.executeFailed(message: String(cString: sqlite3_errmsg(database)))
+            }
+        }
+    }
+
+    private func executeRaw(_ database: OpaquePointer, _ sql: String) throws {
+        var errorMessage: UnsafeMutablePointer<CChar>?
+        let result = sqlite3_exec(database, sql, nil, nil, &errorMessage)
+        defer { sqlite3_free(errorMessage) }
+
+        guard result == SQLITE_OK else {
+            let message = errorMessage.map { String(cString: $0) }
+                ?? String(cString: sqlite3_errmsg(database))
+            throw SQLiteStoreError.executeFailed(message: message)
+        }
+    }
+}
+
+private enum SQLiteBinding {
+    case text(String)
+    case double(Double)
+}
+
+private enum SQLiteStoreError: Error {
+    case openFailed(message: String)
+    case prepareFailed(message: String)
+    case executeFailed(message: String)
+}
+
+private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)

@@ -1,0 +1,19 @@
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Tool-generated directories (codegraph index, Cursor editor config)
+.codegraph/
+.cursor/
+
+# planning-with-files skill artifacts
+task_plan.md
+findings.md
+progress.md
+
+# macOS
+.DS_Store
