@@ -1,4 +1,4 @@
-# m-todo V4 设计:动效驱动的会话列表
+# Agent Inbox V4 设计:动效驱动的会话列表
 
 **版本**: 4.0 · **日期**: 2026-07-04
 
@@ -30,7 +30,7 @@
 
 ```
 ╭─ 会话列表(300pt 宽,高度自适应)─╮
-│ ◎ m-todo          3 分钟前  (✓) │ ← 待办区:完成时间倒序,首个带摘要
+│ ◎ agent-inbox          3 分钟前  (✓) │ ← 待办区:完成时间倒序,首个带摘要
 │   审计完了,基于本机 codex-cli…    │
 │ ◎ _all_do         1 小时前  (✓) │
 │ ────────────────────────────    │
@@ -54,7 +54,7 @@
 ## V4 架构
 
 ```
-MTodoCore
+AgentInboxCore
 ├── Models.swift              # 契约:CodexSessionSummary(+cwd/startedAt)、AgentSnapshot、PanelAnchor
 ├── CodexSessionMonitor.swift # actor:后台扫描 + mtime 缓存(未变更文件零重解析)
 │                             #   head 8KB → session_meta(id/cwd/startedAt)
@@ -62,8 +62,8 @@ MTodoCore
 ├── CodexStatusResolver.swift # 纯函数:summaries → AgentSnapshot(排序/过滤)
 └── StateStore.swift          # SQLite:pin_mode / completed_sessions / panel_anchor
 
-MTodoApp
-├── MTodoApp.swift            # 入口:prepare(载锚点) → 建浮窗 → start(轮询)
+AgentInboxApp
+├── AgentInboxApp.swift            # 入口:prepare(载锚点) → 建浮窗 → start(轮询)
 ├── AppViewModel.swift        # snapshot 发布 + 乐观更新(完成即时剔除)
 ├── FloatingPanelController.swift # 尺寸自适应 + 右上锚定 + 位置持久化(防抖 400ms)
 ├── DesignSystem.swift        # DS:色彩/字体/间距/动画(单文件)
