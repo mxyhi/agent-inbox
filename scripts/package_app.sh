@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Agent Inbox"
 PRODUCT_NAME="agent-inbox"
+ARCHIVE_BASENAME="${AGENT_INBOX_ARCHIVE_BASENAME:-Agent.Inbox}"
 DIST_DIR="${ROOT_DIR}/dist"
 APP_DIR="${DIST_DIR}/${APP_NAME}.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
@@ -93,7 +94,7 @@ else
     codesign --force --deep --sign - "${APP_DIR}"
 fi
 
-ZIP_PATH="${DIST_DIR}/${APP_NAME}-${VERSION}-${BUILD_NUMBER}.zip"
+ZIP_PATH="${DIST_DIR}/${ARCHIVE_BASENAME}-${VERSION}-${BUILD_NUMBER}.zip"
 rm -f "${ZIP_PATH}"
 log "creating update archive ${ZIP_PATH}"
 ditto -c -k --sequesterRsrc --keepParent "${APP_DIR}" "${ZIP_PATH}"
