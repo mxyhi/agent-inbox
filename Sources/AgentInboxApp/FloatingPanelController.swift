@@ -69,6 +69,7 @@ final class FloatingPanelController {
 
     /// 显示浮窗(不抢占焦点)
     func show() {
+        syncPinning()
         panel.orderFrontRegardless()
         viewModel.setPanelVisible(true)
         logger.info("浮窗已显示")
@@ -173,22 +174,47 @@ final class FloatingPanelController {
     private func observePinning() {
         viewModel.$snapshot
             .combineLatest(viewModel.$pinMode)
-            .sink { [weak self, weak viewModel] _, _ in
-                guard let self, let viewModel else { return }
-                self.applyPinning(shouldFloat: viewModel.shouldFloatWindow)
+            .sink { [weak self] snapshot, pinMode in
+                guard let self else { return }
+                // @Published 在 willSet 阶段发值,必须使用 publisher 传入的新快照,
+                // 不能回读 viewModel.snapshot,否则最后一个待办清空时会读到旧值。
+                self.syncPinning(snapshot: snapshot, pinMode: pinMode)
             }
             .store(in: &cancellables)
 
-        applyPinning(shouldFloat: viewModel.shouldFloatWindow)
+        syncPinning()
+    }
+
+    /// 按当前配置与快照同步窗口层级。show() 也显式调用一次,避免窗口重新显示时沿用旧 level。
+    private func syncPinning(
+        snapshot: AgentSnapshot? = nil,
+        pinMode: PinMode? = nil
+    ) {
+        let currentSnapshot = snapshot ?? viewModel.snapshot
+        let currentPinMode = pinMode ?? viewModel.pinMode
+        applyPinning(
+            shouldFloat: currentPinMode.shouldFloat(for: currentSnapshot),
+            pinMode: currentPinMode,
+            todoCount: currentSnapshot.todos.count,
+            runningCount: currentSnapshot.running.count
+        )
     }
 
     /// 应用置顶态:`.statusBar` 比 `.floating` 更接近“始终在普通窗口上方”的用户预期。
-    private func applyPinning(shouldFloat: Bool) {
+    private func applyPinning(
+        shouldFloat: Bool,
+        pinMode: PinMode,
+        todoCount: Int,
+        runningCount: Int
+    ) {
         let nextLevel: NSWindow.Level = shouldFloat ? .statusBar : .normal
         guard panel.level != nextLevel else {
             if shouldFloat, panel.isVisible {
                 panel.orderFrontRegardless()
             }
+            logger.info(
+                "浮窗置顶状态已同步: mode=\(pinMode.rawValue, privacy: .public) todo=\(todoCount, privacy: .public) running=\(runningCount, privacy: .public) shouldFloat=\(shouldFloat, privacy: .public) level=\(Int(self.panel.level.rawValue), privacy: .public)"
+            )
             return
         }
 
@@ -196,6 +222,8 @@ final class FloatingPanelController {
         if shouldFloat, panel.isVisible {
             panel.orderFrontRegardless()
         }
-        logger.info("浮窗置顶状态已应用: \(shouldFloat, privacy: .public)")
+        logger.info(
+            "浮窗置顶状态已应用: mode=\(pinMode.rawValue, privacy: .public) todo=\(todoCount, privacy: .public) running=\(runningCount, privacy: .public) shouldFloat=\(shouldFloat, privacy: .public) level=\(Int(nextLevel.rawValue), privacy: .public)"
+        )
     }
 }
