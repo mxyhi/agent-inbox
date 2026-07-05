@@ -20,6 +20,7 @@ final class AppViewModel: ObservableObject {
     private var debounceTask: Task<Void, Never>?
     private var watcher: CodexSessionsWatcher?
     private var pendingChangedPaths: Set<String> = []
+    private var hasLoadedInitialSnapshot = false
 
     init(
         monitor: CodexSessionMonitor = CodexSessionMonitor(),
@@ -40,8 +41,17 @@ final class AppViewModel: ObservableObject {
         logger.info("持久化状态已加载,pinMode=\(self.pinMode.rawValue, privacy: .public)")
     }
 
-    /// 启动 FSEvents 监听:事件驱动刷新,低频 full scan 只做兜底校准
-    func start() {
+    /// 启动首扫:在浮窗显示前建立快照,避免条件置顶模式用空快照先降级为普通窗口。
+    func loadInitialSnapshot() async {
+        guard !hasLoadedInitialSnapshot else { return }
+
+        await refresh()
+        hasLoadedInitialSnapshot = true
+        logger.info("启动初始快照已加载")
+    }
+
+    /// 启动 FSEvents 监听并完成首扫:事件驱动刷新,低频 full scan 只做兜底校准
+    func start() async {
         guard reconcileTask == nil, watcher == nil else { return }
 
         watcher = CodexSessionsWatcher(root: monitor.sessionsRoot) { [weak self] paths in
@@ -51,9 +61,10 @@ final class AppViewModel: ObservableObject {
         }
         watcher?.start()
 
+        await loadInitialSnapshot()
+
         reconcileTask = Task { [weak self] in
             guard let self else { return }
-            await self.refresh()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 guard !Task.isCancelled else { break }

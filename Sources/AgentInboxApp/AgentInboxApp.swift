@@ -35,15 +35,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 辅助应用:不显示在 Dock
         NSApp.setActivationPolicy(.accessory)
 
-        // 启动顺序很重要:先加载持久化(含窗口锚点)→ 再创建浮窗(定位依赖锚点)→ 最后开 FSEvents 监听
+        // 启动顺序很重要:先加载持久化 → 开监听并完成首扫 → 再创建浮窗(定位/置顶依赖状态)
         Task { @MainActor in
             await viewModel.prepare()
+            await viewModel.start()
 
             let controller = FloatingPanelController(viewModel: viewModel)
             panelController = controller
             controller.show()
 
-            viewModel.start()
         }
     }
 
