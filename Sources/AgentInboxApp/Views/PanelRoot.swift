@@ -1,5 +1,5 @@
 import AppKit
-import MTodoCore
+import AgentInboxCore
 import SwiftUI
 
 /// 浮窗根视图 —— 内容驱动尺寸的自适应面板
@@ -26,7 +26,7 @@ struct PanelRoot: View {
             // 出现新待办时向 VoiceOver 播报
             .onChange(of: viewModel.snapshot.todos.count) { oldCount, newCount in
                 if newCount > oldCount {
-                    announce("有新的 Codex 待办")
+                    announce("有新的 Agent 待办")
                 }
             }
     }
@@ -52,7 +52,9 @@ struct PanelRoot: View {
     private var contextMenuItems: some View {
         if viewModel.snapshot.hasTodo {
             Button("全部标记完成") {
-                viewModel.completeAllTodos()
+                if confirmCompleteAllTodos(count: viewModel.snapshot.todos.count) {
+                    viewModel.completeAllTodos()
+                }
             }
             Divider()
         }
@@ -80,7 +82,7 @@ struct PanelRoot: View {
 
         Divider()
 
-        Button("退出 m-todo") {
+        Button("退出 Agent Inbox") {
             NSApp.terminate(nil)
         }
     }
@@ -101,7 +103,7 @@ struct PanelRoot: View {
 // MARK: - 空态胶囊
 
 /// 空态微型胶囊 —— 没有任务时把存在感降到最低
-/// 从未完成过任务:灰点 + "Codex";全部处理完:绿色对勾 + "Codex"。
+/// 从未完成过任务:灰点 + "Agent";全部处理完:绿色对勾 + "Agent"。
 struct IdleCapsule: View {
     let hasHistory: Bool
 
@@ -115,14 +117,14 @@ struct IdleCapsule: View {
                 StatusOrb(kind: .idle)
             }
 
-            Text("Codex")
+            Text("Agent")
                 .font(DS.Fonts.capsule)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(hasHistory ? "Codex,全部完成" : "Codex,空闲")
+        .accessibilityLabel(hasHistory ? "Agent Inbox,全部完成" : "Agent Inbox,空闲")
     }
 }
 

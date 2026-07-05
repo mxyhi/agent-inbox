@@ -1,5 +1,5 @@
 import AppKit
-import MTodoCore
+import AgentInboxCore
 import SwiftUI
 
 // MARK: - 菜单栏内容
@@ -26,7 +26,9 @@ struct MenuContentView: View {
 
             if viewModel.snapshot.todos.count > 1 {
                 Button("全部标记完成") {
-                    viewModel.completeAllTodos()
+                    if confirmCompleteAllTodos(count: viewModel.snapshot.todos.count) {
+                        viewModel.completeAllTodos()
+                    }
                 }
             }
 
@@ -57,7 +59,7 @@ struct MenuContentView: View {
 
         SettingsMenuButton()
 
-        Button("退出 m-todo") {
+        Button("退出 Agent Inbox") {
             NSApp.terminate(nil)
         }
     }
@@ -106,7 +108,7 @@ struct SettingsView: View {
                 }
 
                 LabeledContent("状态存储") {
-                    Text("~/Library/Application Support/m-todo")
+                    Text("~/Library/Application Support/Agent Inbox")
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MTodoCore
+@testable import AgentInboxCore
 
 @Test
 func stateStorePersistsSettingsAndCompletedSessionsInSQLite() async throws {
@@ -38,6 +38,7 @@ func stateStoreInitializesTrackingBaselineOnFirstLoad() async throws {
     let after = Date()
     let second = await store.load()
 
+    #expect(first.pinMode == .todoOnly)
     // 首次 load 就写入 tracking_started_at,后续启动复用同一基线,不把旧 rollout 变成待办
     #expect(first.trackingStartedAt >= before)
     #expect(first.trackingStartedAt <= after)
@@ -65,7 +66,7 @@ func stateStorePersistsPanelAnchorRoundtrip() async throws {
 
 private func makeTemporaryStateRoot() throws -> URL {
     let root = FileManager.default.temporaryDirectory
-        .appending(path: "m-todo-state-tests")
+        .appending(path: "agent-inbox-state-tests")
         .appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     return root

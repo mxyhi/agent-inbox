@@ -5,11 +5,11 @@ import SQLite3
 public actor StateStore {
     private let databaseURL: URL
     private let fileManager: FileManager
-    private let logger = Logger(subsystem: "m-todo", category: "StateStore")
+    private let logger = Logger(subsystem: "agent-inbox", category: "StateStore")
 
     public init(
         databaseURL: URL = FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: "Library/Application Support/m-todo/state.sqlite"),
+            .appending(path: "Library/Application Support/Agent Inbox/state.sqlite"),
         fileManager: FileManager = .default
     ) {
         self.databaseURL = databaseURL
@@ -23,7 +23,7 @@ public actor StateStore {
 
             try migrate(database)
 
-            let pinMode = try readPinMode(database) ?? .activeOrTodo
+            let pinMode = try readPinMode(database) ?? .todoOnly
             let trackingStartedAt = try ensureTrackingStartedAt(database)
             let completedSessionIDs = try readCompletedSessionIDs(database)
             let panelAnchor = try readPanelAnchor(database)

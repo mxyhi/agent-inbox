@@ -127,7 +127,7 @@ public struct PersistedState: Codable, Equatable, Sendable {
     public var panelAnchor: PanelAnchor?
 
     public init(
-        pinMode: PinMode = .activeOrTodo,
+        pinMode: PinMode = .todoOnly,
         completedSessionIDs: Set<String> = [],
         trackingStartedAt: Date = Date(),
         panelAnchor: PanelAnchor? = nil

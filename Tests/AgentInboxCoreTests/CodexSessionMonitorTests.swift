@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MTodoCore
+@testable import AgentInboxCore
 
 // MARK: - 时间基准
 // 真实 rollout 时间戳格式已于 2026-07-04 在本机验证。epoch 手工推导:
@@ -212,7 +212,7 @@ func monitorIncrementallyParsesChangedRolloutOnly() async throws {
 /// 创建带 YYYY/MM/DD 层级的临时 sessions 根目录
 private func makeTemporarySessionsRoot() throws -> URL {
     let root = FileManager.default.temporaryDirectory
-        .appending(path: "m-todo-monitor-tests")
+        .appending(path: "agent-inbox-monitor-tests")
         .appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(
         at: root.appending(path: "2026/07/04"),

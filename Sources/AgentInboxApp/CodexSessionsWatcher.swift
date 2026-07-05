@@ -6,9 +6,9 @@ import OSLog
 /// 只负责把文件系统变更路径交给上层;状态真值仍由 rollout JSONL 解析得到。
 final class CodexSessionsWatcher {
     private let root: URL
-    private let queue = DispatchQueue(label: "m-todo.codex-sessions-fsevents")
+    private let queue = DispatchQueue(label: "agent-inbox.codex-sessions-fsevents")
     private let onChange: @Sendable ([String]) -> Void
-    private let logger = Logger(subsystem: "m-todo", category: "CodexSessionsWatcher")
+    private let logger = Logger(subsystem: "agent-inbox", category: "CodexSessionsWatcher")
     private var stream: FSEventStreamRef?
 
     init(root: URL, onChange: @escaping @Sendable ([String]) -> Void) {

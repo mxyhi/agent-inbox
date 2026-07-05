@@ -62,7 +62,7 @@ public actor CodexSessionMonitor {
     private let maxFiles: Int
     private let headByteLimit: Int
     private let tailByteLimit: UInt64
-    private let logger = Logger(subsystem: "m-todo", category: "CodexSessionMonitor")
+    private let logger = Logger(subsystem: "agent-inbox", category: "CodexSessionMonitor")
 
     /// 主解析器:真实 rollout 时间戳带毫秒(如 "2026-07-04T14:23:29.440Z")。
     /// ⚠️ ISO8601DateFormatter 默认配置不支持小数秒(旧版扫描器因此永远解析失败),

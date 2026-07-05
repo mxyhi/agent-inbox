@@ -1,4 +1,4 @@
-import MTodoCore
+import AgentInboxCore
 import SwiftUI
 
 // MARK: - 待办行
@@ -157,7 +157,7 @@ extension CodexSessionSummary {
         CodexSessionSummary(
             id: "todo-1",
             filePath: "/tmp/rollout-a.jsonl",
-            cwd: "/Users/dev/workspace/m-todo",
+            cwd: "/Users/dev/workspace/agent-inbox",
             startedAt: Date().addingTimeInterval(-1800),
             modifiedAt: Date().addingTimeInterval(-180),
             taskCompletedAt: Date().addingTimeInterval(-180),

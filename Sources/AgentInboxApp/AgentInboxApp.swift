@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @main
-struct MTodoApp: App {
+struct AgentInboxApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
@@ -15,7 +15,7 @@ struct MTodoApp: App {
                 }
             )
         } label: {
-            Label("m-todo", systemImage: appDelegate.viewModel.menuBarSystemImage)
+            Label("Agent Inbox", systemImage: appDelegate.viewModel.menuBarSystemImage)
         }
         .menuBarExtraStyle(.menu)
 

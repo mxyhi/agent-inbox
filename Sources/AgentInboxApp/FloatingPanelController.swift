@@ -1,12 +1,12 @@
 import AppKit
 import Combine
-import MTodoCore
+import AgentInboxCore
 import OSLog
 import SwiftUI
 
 /// 浮窗位置重置通知(设置页「重置浮窗位置」触发)
 extension Notification.Name {
-    static let resetPanelPosition = Notification.Name("m-todo.resetPanelPosition")
+    static let resetPanelPosition = Notification.Name("agent-inbox.resetPanelPosition")
 }
 
 /// 浮窗控制器 —— 无边框透明面板的生命周期、自适应尺寸与位置持久化
@@ -19,7 +19,7 @@ final class FloatingPanelController {
     private let panel: NSPanel
     private let viewModel: AppViewModel
     private var cancellables: Set<AnyCancellable> = []
-    private let logger = Logger(subsystem: "m-todo", category: "FloatingPanel")
+    private let logger = Logger(subsystem: "agent-inbox", category: "FloatingPanel")
 
     /// 当前窗口右上角锚点(屏幕坐标)
     private var anchor: NSPoint = .zero

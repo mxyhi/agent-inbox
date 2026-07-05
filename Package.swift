@@ -3,28 +3,28 @@
 import PackageDescription
 
 let package = Package(
-    name: "m-todo",
+    name: "agent-inbox",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "m-todo", targets: ["MTodoApp"]),
-        .library(name: "MTodoCore", targets: ["MTodoCore"])
+        .executable(name: "agent-inbox", targets: ["AgentInboxApp"]),
+        .library(name: "AgentInboxCore", targets: ["AgentInboxCore"])
     ],
     targets: [
         .target(
-            name: "MTodoCore",
+            name: "AgentInboxCore",
             linkerSettings: [
                 .linkedLibrary("sqlite3")
             ]
         ),
         .executableTarget(
-            name: "MTodoApp",
-            dependencies: ["MTodoCore"]
+            name: "AgentInboxApp",
+            dependencies: ["AgentInboxCore"]
         ),
         .testTarget(
-            name: "MTodoCoreTests",
-            dependencies: ["MTodoCore"]
+            name: "AgentInboxCoreTests",
+            dependencies: ["AgentInboxCore"]
         )
     ]
 )

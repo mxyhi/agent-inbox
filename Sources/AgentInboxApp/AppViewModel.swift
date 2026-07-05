@@ -1,5 +1,5 @@
 import Foundation
-import MTodoCore
+import AgentInboxCore
 import OSLog
 
 /// 主 ViewModel —— 串联「后台扫描 → 快照解析 → UI 发布」
@@ -9,12 +9,12 @@ import OSLog
 final class AppViewModel: ObservableObject {
     @Published private(set) var snapshot: AgentSnapshot = .empty
     @Published private(set) var isPanelVisible = false
-    @Published var pinMode: PinMode = .activeOrTodo
+    @Published var pinMode: PinMode = .todoOnly
 
     private let monitor: CodexSessionMonitor
     private let resolver: CodexStatusResolver
     private let stateStore: StateStore
-    private let logger = Logger(subsystem: "m-todo", category: "AppViewModel")
+    private let logger = Logger(subsystem: "agent-inbox", category: "AppViewModel")
     private var persistedState = PersistedState()
     private var reconcileTask: Task<Void, Never>?
     private var debounceTask: Task<Void, Never>?

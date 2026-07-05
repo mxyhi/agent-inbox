@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MTodoCore
+@testable import AgentInboxCore
 
 /// 构造摘要 fixture 的便捷函数
 private func makeSummary(
@@ -21,8 +21,8 @@ private func makeSummary(
 }
 
 @Test
-func defaultPinModeIsActiveOrTodo() {
-    #expect(PersistedState().pinMode == .activeOrTodo)
+func defaultPinModeIsTodoOnly() {
+    #expect(PersistedState().pinMode == .todoOnly)
 }
 
 @Test
