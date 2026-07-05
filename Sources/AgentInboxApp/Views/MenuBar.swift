@@ -119,7 +119,9 @@ struct SettingsView: View {
             // 版本
             Section {
                 LabeledContent("版本") {
-                    Text("4.0")
+                    Text(AppVersion.displayValue(
+                        shortVersionString: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+                    ))
                         .foregroundStyle(.tertiary)
                 }
             }
