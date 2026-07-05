@@ -116,6 +116,45 @@ struct SettingsView: View {
                 Text("数据")
             }
 
+            Section {
+                PromptFilterRuleEditor { pattern, matchType in
+                    viewModel.addPromptFilterRule(pattern: pattern, matchType: matchType)
+                }
+
+                if viewModel.promptFilterRules.isEmpty {
+                    Text("暂无过滤规则")
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 4)
+                } else {
+                    ForEach(viewModel.promptFilterRules) { rule in
+                        PromptFilterRuleRow(
+                            rule: rule,
+                            onEnabledChange: { isEnabled in
+                                viewModel.setPromptFilterRuleEnabled(id: rule.id, isEnabled: isEnabled)
+                            },
+                            onUpdate: { pattern, matchType in
+                                viewModel.updatePromptFilterRule(
+                                    id: rule.id,
+                                    pattern: pattern,
+                                    matchType: matchType
+                                )
+                            },
+                            onDelete: {
+                                viewModel.deletePromptFilterRule(id: rule.id)
+                            }
+                        )
+                    }
+                }
+            } header: {
+                Text("firstPrompt 过滤")
+            } footer: {
+                Text("命中规则的已完成会话不会进入待办,也不会被标记为完成")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+
             // 版本
             Section {
                 LabeledContent("版本") {
@@ -127,6 +166,123 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420, height: 340)
+        .frame(width: 460, height: 520)
+    }
+}
+
+private struct PromptFilterRuleEditor: View {
+    let onAdd: (String, PromptFilterMatchType) -> Void
+
+    @State private var pattern = ""
+    @State private var matchType: PromptFilterMatchType = .contains
+
+    // 去除首尾空白后的输入,用于判空与提交
+    private var trimmedPattern: String {
+        pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // 匹配方式:分段控件比下拉更直观,只有「包含 / 正则」两项
+            Picker("匹配方式", selection: $matchType) {
+                ForEach(PromptFilterMatchType.allCases) { type in
+                    Text(type.label).tag(type)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .fixedSize()
+
+            // firstPrompt 片段或正则;回车即添加
+            TextField("firstPrompt 片段或正则", text: $pattern)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(add)
+
+            // 主操作按钮,输入为空时禁用
+            Button("添加", action: add)
+                .buttonStyle(.borderedProminent)
+                .disabled(trimmedPattern.isEmpty)
+        }
+    }
+
+    private func add() {
+        guard !trimmedPattern.isEmpty else { return }
+        onAdd(pattern, matchType)
+        pattern = ""
+        matchType = .contains
+    }
+}
+
+private struct PromptFilterRuleRow: View {
+    let rule: PromptFilterRule
+    let onEnabledChange: (Bool) -> Void
+    let onUpdate: (String, PromptFilterMatchType) -> Void
+    let onDelete: () -> Void
+
+    @State private var pattern: String
+    @State private var matchType: PromptFilterMatchType
+
+    init(
+        rule: PromptFilterRule,
+        onEnabledChange: @escaping (Bool) -> Void,
+        onUpdate: @escaping (String, PromptFilterMatchType) -> Void,
+        onDelete: @escaping () -> Void
+    ) {
+        self.rule = rule
+        self.onEnabledChange = onEnabledChange
+        self.onUpdate = onUpdate
+        self.onDelete = onDelete
+        _pattern = State(initialValue: rule.pattern)
+        _matchType = State(initialValue: rule.matchType)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // 启用开关:关闭后规则不再命中,pattern 文本转灰提示
+            Toggle("", isOn: Binding(get: { rule.isEnabled }, set: { onEnabledChange($0) }))
+                .labelsHidden()
+                .controlSize(.small)
+
+            // 匹配方式:紧凑菜单,改动后由「保存」提交
+            Picker("匹配方式", selection: $matchType) {
+                ForEach(PromptFilterMatchType.allCases) { type in
+                    Text(type.label).tag(type)
+                }
+            }
+            .labelsHidden()
+            .fixedSize()
+
+            // 可就地编辑的 pattern,回车即保存
+            TextField("firstPrompt 片段或正则", text: $pattern)
+                .textFieldStyle(.plain)
+                .foregroundStyle(rule.isEnabled ? .primary : .secondary)
+                .onSubmit(save)
+
+            Spacer(minLength: 0)
+
+            // 仅在有未保存改动时出现,避免每行都堆按钮
+            if hasChanges {
+                Button("保存", action: save)
+                    .buttonStyle(.borderless)
+            }
+
+            Button(role: .destructive, action: onDelete) {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help("删除过滤规则")
+        }
+    }
+
+    // pattern(去空白后非空且有变化)或匹配方式改变时可保存
+    private var hasChanges: Bool {
+        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && (trimmed != rule.pattern || matchType != rule.matchType)
+    }
+
+    private func save() {
+        guard hasChanges else { return }
+        onUpdate(pattern, matchType)
     }
 }

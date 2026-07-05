@@ -10,6 +10,7 @@ import OSLog
 final class AppViewModel: ObservableObject {
     @Published private(set) var snapshot: AgentSnapshot = .empty
     @Published private(set) var isPanelVisible = false
+    @Published private(set) var promptFilterRules: [PromptFilterRule] = []
     @Published var pinMode: PinMode = .todoOnly
 
     private let monitor: CodexSessionMonitor
@@ -39,7 +40,10 @@ final class AppViewModel: ObservableObject {
     func prepare() async {
         persistedState = await stateStore.load()
         pinMode = persistedState.pinMode
-        logger.info("持久化状态已加载,pinMode=\(self.pinMode.rawValue, privacy: .public)")
+        promptFilterRules = persistedState.promptFilterRules
+        logger.info(
+            "持久化状态已加载,pinMode=\(self.pinMode.rawValue, privacy: .public),filterRules=\(self.promptFilterRules.count)"
+        )
     }
 
     /// 启动首扫:在浮窗显示前建立快照,避免条件置顶模式用空快照先降级为普通窗口。
@@ -161,6 +165,93 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func addPromptFilterRule(pattern: String, matchType: PromptFilterMatchType) {
+        let trimmedPattern = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPattern.isEmpty else { return }
+
+        let now = Date()
+        let rule = PromptFilterRule(
+            matchType: matchType,
+            pattern: trimmedPattern,
+            createdAt: now,
+            updatedAt: now
+        )
+        persistedState.promptFilterRules.append(rule)
+        promptFilterRules = persistedState.promptFilterRules
+        filterCurrentSnapshot()
+        logger.info("新增 firstPrompt 过滤规则: \(rule.id, privacy: .public)")
+
+        Task {
+            await stateStore.save(persistedState)
+        }
+    }
+
+    func addPromptFilterRule(from sessionID: String) {
+        guard let session = snapshot.todos.first(where: { $0.id == sessionID }),
+              let prompt = session.firstPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !prompt.isEmpty else {
+            logger.warning("无法从会话创建 firstPrompt 过滤规则: \(sessionID, privacy: .public)")
+            return
+        }
+
+        addPromptFilterRule(
+            pattern: prompt,
+            matchType: .contains
+        )
+    }
+
+    func setPromptFilterRuleEnabled(id: String, isEnabled: Bool) {
+        guard let index = persistedState.promptFilterRules.firstIndex(where: { $0.id == id }) else { return }
+        guard persistedState.promptFilterRules[index].isEnabled != isEnabled else { return }
+
+        persistedState.promptFilterRules[index].isEnabled = isEnabled
+        persistedState.promptFilterRules[index].updatedAt = Date()
+        promptFilterRules = persistedState.promptFilterRules
+        filterCurrentSnapshot()
+        logger.info("过滤规则启用状态变更: \(id, privacy: .public), enabled=\(isEnabled)")
+
+        Task {
+            await stateStore.save(persistedState)
+            await refresh()
+        }
+    }
+
+    func updatePromptFilterRule(
+        id: String,
+        pattern: String,
+        matchType: PromptFilterMatchType
+    ) {
+        let trimmedPattern = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPattern.isEmpty else { return }
+        guard let index = persistedState.promptFilterRules.firstIndex(where: { $0.id == id }) else { return }
+
+        persistedState.promptFilterRules[index].pattern = trimmedPattern
+        persistedState.promptFilterRules[index].matchType = matchType
+        persistedState.promptFilterRules[index].updatedAt = Date()
+        promptFilterRules = persistedState.promptFilterRules
+        filterCurrentSnapshot()
+        logger.info("更新 firstPrompt 过滤规则: \(id, privacy: .public)")
+
+        Task {
+            await stateStore.save(persistedState)
+            await refresh()
+        }
+    }
+
+    func deletePromptFilterRule(id: String) {
+        let originalCount = persistedState.promptFilterRules.count
+        persistedState.promptFilterRules.removeAll { $0.id == id }
+        guard persistedState.promptFilterRules.count != originalCount else { return }
+
+        promptFilterRules = persistedState.promptFilterRules
+        logger.info("删除 firstPrompt 过滤规则: \(id, privacy: .public)")
+
+        Task {
+            await stateStore.save(persistedState)
+            await refresh()
+        }
+    }
+
     /// 浮窗显隐状态由 AppKit 控制器回写,菜单项据此展示下一步动作。
     func setPanelVisible(_ visible: Bool) {
         guard isPanelVisible != visible else { return }
@@ -258,6 +349,7 @@ final class AppViewModel: ObservableObject {
         let next = resolver.resolve(
             summaries: summaries,
             completedSessionIDs: persistedState.completedSessionIDs,
+            promptFilterRules: persistedState.promptFilterRules,
             trackingStartedAt: persistedState.trackingStartedAt
         )
 
@@ -265,5 +357,18 @@ final class AppViewModel: ObservableObject {
             logger.info("快照变化: 待办 \(next.todos.count) · 运行 \(next.running.count)")
             snapshot = next
         }
+    }
+
+    private func filterCurrentSnapshot() {
+        let filteredTodos = snapshot.todos.filter { session in
+            !persistedState.promptFilterRules.contains { $0.matches(session) }
+        }
+        guard filteredTodos.count != snapshot.todos.count else { return }
+
+        snapshot = AgentSnapshot(
+            todos: filteredTodos,
+            running: snapshot.running,
+            hasCompletedHistory: snapshot.hasCompletedHistory
+        )
     }
 }

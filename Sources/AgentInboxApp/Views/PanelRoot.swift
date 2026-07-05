@@ -42,7 +42,8 @@ struct PanelRoot: View {
             SessionList(
                 snapshot: viewModel.snapshot,
                 onComplete: { viewModel.completeTodo(id: $0) },
-                onOpen: { viewModel.openSession(id: $0) }
+                onOpen: { viewModel.openSession(id: $0) },
+                onCreateFilter: { viewModel.addPromptFilterRule(from: $0) }
             )
             .transition(.opacity)
         }
@@ -138,6 +139,7 @@ struct SessionList: View {
     let snapshot: AgentSnapshot
     let onComplete: (String) -> Void
     let onOpen: (String) -> Void
+    let onCreateFilter: (String) -> Void
 
     /// 每区展示上限
     private static let sectionLimit = 3
@@ -150,14 +152,16 @@ struct SessionList: View {
                     FocusTodoCard(
                         session: session,
                         onOpen: { onOpen(session.id) },
-                        onComplete: { onComplete(session.id) }
+                        onComplete: { onComplete(session.id) },
+                        onCreateFilter: { onCreateFilter(session.id) }
                     )
                     // 卡下留白:仅当卡后面还有内容(更多待办 / 运行区)时才需要
                     .padding(.bottom, hasContentBelowFocusCard ? DS.Metrics.focusCardGap : 0)
                 } else {
                     TodoRow(
                         session: session,
-                        onComplete: { onComplete(session.id) }
+                        onComplete: { onComplete(session.id) },
+                        onCreateFilter: { onCreateFilter(session.id) }
                     )
                 }
             }

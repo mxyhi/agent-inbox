@@ -13,6 +13,8 @@ struct FocusTodoCard: View {
     let onOpen: () -> Void
     /// 长按完成 —— 从快照剔除该待办
     let onComplete: () -> Void
+    /// 用当前 firstPrompt 创建过滤规则
+    let onCreateFilter: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Metrics.segmentTagSpacing) {
@@ -78,6 +80,13 @@ struct FocusTodoCard: View {
         .accessibilityValue(accessibilityValue)
         .accessibilityAction(named: "标记完成", onComplete)
         .accessibilityAction(named: "打开会话", onOpen)
+        .contextMenu {
+            if trimmedPrompt != nil {
+                Button("按此提示词过滤") {
+                    onCreateFilter()
+                }
+            }
+        }
     }
 
     /// 首个用户提示词(去空白;空则不渲染)
@@ -136,6 +145,7 @@ private struct SegmentLine: View {
 struct TodoRow: View {
     let session: CodexSessionSummary
     let onComplete: () -> Void
+    let onCreateFilter: () -> Void
 
     @State private var isHovered = false
 
@@ -165,6 +175,13 @@ struct TodoRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("待办:\(session.projectName)")
         .accessibilityAction(named: "标记完成", onComplete)
+        .contextMenu {
+            if session.firstPrompt?.trimmed != nil {
+                Button("按此提示词过滤") {
+                    onCreateFilter()
+                }
+            }
+        }
     }
 }
 
@@ -335,9 +352,9 @@ private extension String {
 
 #Preview("会话列表") {
     VStack(alignment: .leading, spacing: 2) {
-        FocusTodoCard(session: .mockTodo, onOpen: {}, onComplete: {})
+        FocusTodoCard(session: .mockTodo, onOpen: {}, onComplete: {}, onCreateFilter: {})
             .padding(.bottom, DS.Metrics.focusCardGap)
-        TodoRow(session: .mockTodo2, onComplete: {})
+        TodoRow(session: .mockTodo2, onComplete: {}, onCreateFilter: {})
         OverflowLabel(text: "还有 2 个待办")
         Divider()
         RunningRow(session: .mockRunning)
