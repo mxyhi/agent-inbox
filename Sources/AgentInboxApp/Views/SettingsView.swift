@@ -41,6 +41,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable, Hashable {
 /// 固定 frame + 明确列宽,规避 NavigationSplitView 放进 Settings 场景时的尺寸自适应小毛病
 struct SettingsView: View {
     @ObservedObject var viewModel: AppViewModel
+    @ObservedObject var updateController: AppUpdateController
 
     // 当前选中分类;List 单选绑定要求可选类型,默认停在「浮窗」
     @State private var selection: SettingsCategory? = .panel
@@ -77,7 +78,7 @@ struct SettingsView: View {
         case .filter:
             FilterSettingsSection(viewModel: viewModel)
         case .about:
-            AboutSettingsSection()
+            AboutSettingsSection(updateController: updateController)
         }
     }
 }
@@ -222,6 +223,8 @@ private struct FilterSettingsSection: View {
 
 /// 关于(版本信息)
 private struct AboutSettingsSection: View {
+    @ObservedObject var updateController: AppUpdateController
+
     var body: some View {
         Form {
             Section {
@@ -231,6 +234,11 @@ private struct AboutSettingsSection: View {
                     ))
                         .foregroundStyle(.tertiary)
                 }
+
+                Button("检查更新…") {
+                    updateController.checkForUpdates()
+                }
+                .disabled(!updateController.canCheckForUpdates)
             }
         }
         .formStyle(.grouped)

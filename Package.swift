@@ -11,6 +11,9 @@ let package = Package(
         .executable(name: "agent-inbox", targets: ["AgentInboxApp"]),
         .library(name: "AgentInboxCore", targets: ["AgentInboxCore"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.4")
+    ],
     targets: [
         .target(
             name: "AgentInboxCore",
@@ -20,7 +23,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "AgentInboxApp",
-            dependencies: ["AgentInboxCore"]
+            dependencies: [
+                "AgentInboxCore",
+                .product(name: "Sparkle", package: "Sparkle")
+            ]
         ),
         .testTarget(
             name: "AgentInboxCoreTests",

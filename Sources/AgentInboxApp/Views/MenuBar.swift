@@ -8,6 +8,7 @@ import SwiftUI
 /// V4:摘要行显示「N 个待办 · M 个运行中」,待办可直接在菜单里逐个完成。
 struct MenuContentView: View {
     @ObservedObject var viewModel: AppViewModel
+    @ObservedObject var updateController: AppUpdateController
     let toggleWindow: () -> Void
 
     var body: some View {
@@ -56,6 +57,11 @@ struct MenuContentView: View {
         }
 
         Divider()
+
+        Button("检查更新…") {
+            updateController.checkForUpdates()
+        }
+        .disabled(!updateController.canCheckForUpdates)
 
         SettingsMenuButton()
 

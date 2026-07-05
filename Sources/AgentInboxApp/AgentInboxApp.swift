@@ -10,6 +10,7 @@ struct AgentInboxApp: App {
         MenuBarExtra {
             MenuContentView(
                 viewModel: appDelegate.viewModel,
+                updateController: appDelegate.updateController,
                 toggleWindow: {
                     appDelegate.togglePanel()
                 }
@@ -21,7 +22,10 @@ struct AgentInboxApp: App {
 
         // 设置窗口
         Settings {
-            SettingsView(viewModel: appDelegate.viewModel)
+            SettingsView(
+                viewModel: appDelegate.viewModel,
+                updateController: appDelegate.updateController
+            )
         }
     }
 }
@@ -29,6 +33,7 @@ struct AgentInboxApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let viewModel = AppViewModel()
+    let updateController = AppUpdateController()
     private var panelController: FloatingPanelController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {

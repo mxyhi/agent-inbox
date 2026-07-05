@@ -1,0 +1,136 @@
+name: Package App
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: App version written to CFBundleShortVersionString.
+        required: true
+        default: 0.0.1
+      build_number:
+        description: Numeric build number written to CFBundleVersion. Empty uses GitHub run number.
+        required: false
+        default: ""
+      release_tag:
+        description: GitHub Release tag. Empty uses v<version>.
+        required: false
+        default: ""
+      update_feed_url:
+        description: Sparkle appcast URL. Empty uses GitHub Releases latest appcast.
+        required: false
+        default: ""
+      download_url_prefix:
+        description: Public URL prefix for Sparkle archives. Empty uses the selected GitHub Release.
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Build macOS app artifact
+    runs-on: macos-latest
+    env:
+      HAS_SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY != '' && 'true' || 'false' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/.swiftpm
+          key: swiftpm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}-${{ hashFiles('Package.swift') }}
+          restore-keys: |
+            swiftpm-${{ runner.os }}-
+
+      - name: Resolve release metadata
+        id: release
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+          BUILD_INPUT: ${{ inputs.build_number }}
+          TAG_INPUT: ${{ inputs.release_tag }}
+          FEED_INPUT: ${{ inputs.update_feed_url }}
+          DOWNLOAD_PREFIX_INPUT: ${{ inputs.download_url_prefix }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+        run: |
+          if [[ -z "${SPARKLE_PUBLIC_ED_KEY}" ]]; then
+            echo "SPARKLE_PUBLIC_ED_KEY repository variable is required"
+            exit 1
+          fi
+          if [[ "${HAS_SPARKLE_PRIVATE_KEY}" != "true" ]]; then
+            echo "SPARKLE_PRIVATE_ED_KEY repository secret is required"
+            exit 1
+          fi
+
+          build_number="${BUILD_INPUT:-${GITHUB_RUN_NUMBER}}"
+          release_tag="${TAG_INPUT:-v${VERSION_INPUT}}"
+          feed_url="${FEED_INPUT:-https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/appcast.xml}"
+          download_url_prefix="${DOWNLOAD_PREFIX_INPUT:-https://github.com/${GITHUB_REPOSITORY}/releases/download/${release_tag}/}"
+
+          {
+            echo "build_number=${build_number}"
+            echo "release_tag=${release_tag}"
+            echo "feed_url=${feed_url}"
+            echo "download_url_prefix=${download_url_prefix}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build app bundle
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+          BUILD_NUMBER: ${{ steps.release.outputs.build_number }}
+          FEED_URL: ${{ steps.release.outputs.feed_url }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+        run: |
+          AGENT_INBOX_VERSION="${VERSION_INPUT}" \
+          AGENT_INBOX_BUILD="${BUILD_NUMBER}" \
+          AGENT_INBOX_UPDATE_FEED_URL="${FEED_URL}" \
+          AGENT_INBOX_SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_ED_KEY}" \
+          scripts/package_app.sh
+
+      - name: Generate Sparkle appcast
+        env:
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+          DOWNLOAD_URL_PREFIX: ${{ steps.release.outputs.download_url_prefix }}
+        run: |
+          generate_appcast="$(find .build/artifacts -path '*/bin/generate_appcast' -perm +111 | sort | head -n 1)"
+          if [[ -z "${generate_appcast}" ]]; then
+            echo "generate_appcast not found in SwiftPM artifacts"
+            exit 1
+          fi
+
+          printf '%s' "${SPARKLE_PRIVATE_ED_KEY}" | "${generate_appcast}" \
+            --ed-key-file - \
+            --download-url-prefix "${DOWNLOAD_URL_PREFIX}" \
+            -o "${GITHUB_WORKSPACE}/dist/appcast.xml" \
+            "${GITHUB_WORKSPACE}/dist"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          VERSION_INPUT: ${{ inputs.version }}
+          BUILD_NUMBER: ${{ steps.release.outputs.build_number }}
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" dist/*.zip dist/appcast.xml --clobber
+          else
+            gh release create "${RELEASE_TAG}" \
+              dist/*.zip \
+              dist/appcast.xml \
+              --title "Agent Inbox ${VERSION_INPUT}" \
+              --notes "Agent Inbox ${VERSION_INPUT} (${BUILD_NUMBER})"
+          fi
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-inbox-macos-${{ inputs.version }}
+          path: |
+            dist/*.zip
+            dist/appcast.xml
+          if-no-files-found: error
+          retention-days: 14
