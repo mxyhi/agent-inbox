@@ -64,10 +64,11 @@ struct SettingsView: View {
         } detail: {
             // 右侧详情:按选中分类切换对应面板(nil 兜底回浮窗)
             detail(for: selection ?? .panel)
-                .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationSplitViewStyle(.balanced)
-        .frame(width: 640, height: 480)
+        // 设置窗口尺寸:侧边栏 140pt + 详情区 560pt = 700pt 总宽;高度 540pt 给表单和列表足够空间
+        .frame(width: 700, height: 540)
     }
 
     /// 分类 → 详情面板
@@ -181,77 +182,103 @@ private struct OpenSettingsSection: View {
                     saveConfig()
                 }
 
-                // 自定义命令输入框（仅在选择自定义时显示）
+                // 自定义命令配置区域（仅在选择自定义时显示）
                 if method == .custom {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("自定义命令")
-                            .font(.headline)
+                    Divider()
+                        .padding(.vertical, 4)
 
-                        TextField("输入 shell 命令模板", text: $customCommand, axis: .vertical)
+                    // 命令模板输入
+                    LabeledContent {
+                        TextField("", text: $customCommand, axis: .vertical)
                             .textFieldStyle(.roundedBorder)
-                            .font(.system(.body, design: .monospaced))
-                            .lineLimit(3...6)
-                            .onSubmit {
-                                saveConfig()
-                            }
+                            .font(.system(size: 12, design: .monospaced))
+                            .lineLimit(2...4)
+                            .multilineTextAlignment(.leading) // 强制左对齐
+                            .onSubmit { saveConfig() }
+                    } label: {
+                        Text("命令模板")
+                            .frame(width: 80, alignment: .trailing)
+                    }
 
-                        // 变量说明
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("支持的变量：")
-                                .font(.caption)
+                    // 变量参考表格 —— 紧凑的两列布局
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("可用变量")
+                                .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
 
-                            ForEach(OpenSessionConfig.supportedVariables, id: \.name) { variable in
-                                HStack(spacing: 8) {
-                                    Text(variable.name)
-                                        .font(.caption.monospaced())
-                                        .foregroundStyle(.blue)
-                                    Text("—")
-                                        .foregroundStyle(.tertiary)
-                                    Text(variable.description)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
+                                ForEach(OpenSessionConfig.supportedVariables, id: \.name) { variable in
+                                    GridRow {
+                                        Text(variable.name)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(.blue)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                                        Text(variable.description)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
                                 }
                             }
                         }
-                        .padding(.vertical, 4)
+                        .padding(8)
+                    }
+                    .backgroundStyle(Color(nsColor: .controlBackgroundColor))
 
-                        // 示例命令
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("示例命令：")
-                                .font(.caption)
+                    // 示例命令 —— 代码块风格
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("示例")
+                                .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
 
-                            ForEach(OpenSessionConfig.exampleCommands, id: \.self) { example in
-                                Text(example)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.tertiary)
-                                    .textSelection(.enabled)
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(OpenSessionConfig.exampleCommands, id: \.self) { example in
+                                    Text(example)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundStyle(.primary)
+                                        .textSelection(.enabled)
+                                        .padding(.leading, 2)
+                                }
                             }
                         }
-                        .padding(.vertical, 4)
+                        .padding(8)
+                    }
+                    .backgroundStyle(Color(nsColor: .textBackgroundColor))
 
-                        // 测试按钮
-                        HStack {
-                            Button("测试命令") {
-                                testCommand()
-                            }
-                            .disabled(customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isTestingCommand)
-
-                            if isTestingCommand {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .padding(.leading, 8)
-                            }
-
-                            if let result = testResult {
-                                Text(result)
+                    // 测试区域 —— 独立行，视觉上与输入区分离
+                    HStack(spacing: 12) {
+                        Button {
+                            testCommand()
+                        } label: {
+                            HStack(spacing: 4) {
+                                if isTestingCommand {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                        .scaleEffect(0.8)
+                                } else {
+                                    Image(systemName: "play.circle")
+                                        .font(.caption)
+                                }
+                                Text("测试命令")
                                     .font(.caption)
-                                    .foregroundStyle(result.contains("成功") ? .green : .red)
-                                    .padding(.leading, 8)
                             }
+                        }
+                        .disabled(customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isTestingCommand)
+
+                        if let result = testResult {
+                            HStack(spacing: 4) {
+                                Image(systemName: result.contains("成功") ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                    .font(.caption)
+                                Text(result.replacingOccurrences(of: "✓ ", with: "").replacingOccurrences(of: "❌ ", with: ""))
+                                    .font(.caption)
+                            }
+                            .foregroundStyle(result.contains("成功") ? .green : .red)
                         }
                     }
+                    .padding(.top, 4)
                 }
             } footer: {
                 Text("配置如何打开会话工作目录。更改会立即保存。")
