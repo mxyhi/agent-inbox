@@ -57,6 +57,62 @@ func monitorParsesSessionMetaAndLastTaskComplete() async throws {
 }
 
 @Test
+func monitorExtractsFirstUserPromptSkippingInjectedContext() async throws {
+    let root = try makeTemporarySessionsRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    // 首行 session_meta;随后是注入的 role==user(AGENTS.md/环境)与 developer 上下文 —— 都应被跳过。
+    // 真正的用户提示词是首个 event_msg/user_message,且 message 以空行/空白起头,需清洗为首个非空行。
+    let body = """
+    {"timestamp":"2026-07-04T14:13:43.646Z","type":"session_meta","payload":{"id":"session-fp","timestamp":"2026-07-04T14:13:01.605Z","cwd":"/tmp/fp"}}
+    {"timestamp":"2026-07-04T14:13:44.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"text","text":"# AGENTS.md instructions <environment_context> 注入不是提示词"}]}}
+    {"timestamp":"2026-07-04T14:13:45.000Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"text","text":"permissions instructions"}]}}
+    {"timestamp":"2026-07-04T14:13:46.000Z","type":"event_msg","payload":{"type":"user_message","message":"   \\n  部署一下  \\n次要行"}}
+    {"timestamp":"2026-07-04T14:20:00.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"完成"}}
+    """
+    _ = try writeRollout(
+        root: root,
+        name: "rollout-2026-07-04T14-13-01-fp.jsonl",
+        body: body,
+        mtimeEpoch: 1_783_175_010
+    )
+
+    let monitor = CodexSessionMonitor(sessionsRoot: root)
+    let summary = try #require(await monitor.scan().first)
+
+    // 跳过注入的 role==user,取 event_msg/user_message,并清洗为首个非空行
+    #expect(summary.firstPrompt == "部署一下")
+}
+
+@Test
+func monitorTruncatesOverlongFirstPrompt() async throws {
+    let root = try makeTemporarySessionsRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    // 250 字符的单行提示词(模拟终端粘贴):应截断到 200 字符 + 省略号
+    let longLine = String(repeating: "长", count: 250)
+    let body = """
+    {"timestamp":"2026-07-04T14:13:43.646Z","type":"session_meta","payload":{"id":"session-long","timestamp":"2026-07-04T14:13:01.605Z","cwd":"/tmp/long"}}
+    {"timestamp":"2026-07-04T14:13:46.000Z","type":"event_msg","payload":{"type":"user_message","message":"\(longLine)"}}
+    {"timestamp":"2026-07-04T14:20:00.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"完成"}}
+    """
+    _ = try writeRollout(
+        root: root,
+        name: "rollout-2026-07-04T14-13-01-long.jsonl",
+        body: body,
+        mtimeEpoch: 1_783_175_010
+    )
+
+    let monitor = CodexSessionMonitor(sessionsRoot: root)
+    let summary = try #require(await monitor.scan().first)
+
+    let prompt = try #require(summary.firstPrompt)
+    #expect(prompt.count == 201) // 200 字符 + 1 省略号
+    #expect(prompt.hasSuffix("…"))
+    #expect(prompt.hasPrefix("长长长"))
+}
+
+@Test
 func monitorFallsBackToPlainISO8601WithoutFractionalSeconds() async throws {
     let root = try makeTemporarySessionsRoot()
     defer { try? FileManager.default.removeItem(at: root) }

@@ -57,8 +57,12 @@ public struct CodexSessionSummary: Codable, Equatable, Sendable, Identifiable {
     public let lifecycleState: CodexTurnLifecycleState
     /// task_complete 事件时间;nil 表示任务尚未结束
     public let taskCompletedAt: Date?
-    /// task_complete.last_agent_message,待办行的摘要正文
+    /// task_complete.last_agent_message,焦点卡「答」段:Codex 最后交付了什么
     public let lastAgentMessage: String?
+    /// 会话首个用户提示词(rollout 首个 event_msg/user_message,已跳过注入的
+    /// developer/环境上下文;取首个非空行并截断)。焦点卡「问」段展示这活儿的由来;
+    /// nil = head 窗口内未捕获到用户输入。
+    public let firstPrompt: String?
 
     public init(
         id: String,
@@ -68,7 +72,8 @@ public struct CodexSessionSummary: Codable, Equatable, Sendable, Identifiable {
         modifiedAt: Date,
         lifecycleState: CodexTurnLifecycleState? = nil,
         taskCompletedAt: Date?,
-        lastAgentMessage: String?
+        lastAgentMessage: String?,
+        firstPrompt: String? = nil
     ) {
         self.id = id
         self.filePath = filePath
@@ -78,6 +83,7 @@ public struct CodexSessionSummary: Codable, Equatable, Sendable, Identifiable {
         self.lifecycleState = lifecycleState ?? (taskCompletedAt == nil ? .running : .completed)
         self.taskCompletedAt = taskCompletedAt
         self.lastAgentMessage = lastAgentMessage
+        self.firstPrompt = firstPrompt
     }
 
     public var isTaskComplete: Bool {

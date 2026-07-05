@@ -21,12 +21,12 @@ public actor CodexSessionMonitor {
         let payload: RolloutPayload?
     }
 
-    /// rollout 行 payload:session_meta 与 task_complete 两类字段的并集
+    /// rollout 行 payload:session_meta / task_complete / user_message 三类字段的并集
     private struct RolloutPayload: Decodable {
         /// session_meta:会话 ID(真实数据 id 与 session_id 并存,优先 id)
         let id: String?
         let sessionId: String?
-        /// event_msg 的事件子类型,如 task_complete
+        /// event_msg 的事件子类型,如 task_complete / user_message
         let type: String?
         /// session_meta:会话工作目录
         let cwd: String?
@@ -34,6 +34,8 @@ public actor CodexSessionMonitor {
         let timestamp: String?
         /// task_complete:agent 最后一条消息(可能长达数百字符且含换行)
         let lastAgentMessage: String?
+        /// user_message:用户输入原文(可能是几 KB 的终端粘贴,含多行/ASCII art),存前需清洗截断
+        let message: String?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -42,14 +44,17 @@ public actor CodexSessionMonitor {
             case cwd
             case timestamp
             case lastAgentMessage = "last_agent_message"
+            case message
         }
     }
 
-    /// head 解析结果:session_meta 三元组
+    /// head 解析结果:session_meta 三元组 + 首个用户提示词
     private struct HeadInfo {
         var sessionID: String?
         var cwd: String?
         var startedAt: Date?
+        /// 首个 event_msg/user_message 的清洗后提示词;nil = head 窗口内未捕获到用户输入
+        var firstPrompt: String?
     }
 
     /// tail 解析结果:最近 lifecycle event 与 task_complete 附带信息
@@ -78,8 +83,9 @@ public actor CodexSessionMonitor {
     public init(
         sessionsRoot: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".codex/sessions"),
         maxFiles: Int = 80,
-        // 真实 session_meta 首行含 base_instructions 全文,2026-07-04 实测 13–22KB,取 64KB 留足裕量
-        headByteLimit: Int = 64 * 1024,
+        // head 需覆盖到首个 user_message:真提示词稳定落在 ~90KB–114KB 处(前面 developer/permissions
+        // ~47KB、AGENTS.md ~11KB、turn_context ~13KB 把它顶下去),故取 256KB 才能扫到
+        headByteLimit: Int = 256 * 1024,
         tailByteLimit: UInt64 = 256 * 1024
     ) {
         self.sessionsRoot = sessionsRoot
@@ -293,17 +299,22 @@ public actor CodexSessionMonitor {
             modifiedAt: modifiedAt,
             lifecycleState: tail.lifecycleState,
             taskCompletedAt: tail.taskCompletedAt,
-            lastAgentMessage: tail.lastAgentMessage
+            lastAgentMessage: tail.lastAgentMessage,
+            firstPrompt: head.firstPrompt // head 扫描出的首个 user_message(清洗截断后)
         )
     }
 
-    /// 读文件头 headByteLimit 字节内的第一行,解析 session_meta → id/cwd/startedAt
+    /// 读文件头 headByteLimit 字节:第 0 行取 session_meta(id/cwd/startedAt),
+    /// 再逐行扫描缓冲区内所有完整行,取首个 event_msg/user_message 作为真实用户提示词。
     private func parseHead(handle: FileHandle, decoder: JSONDecoder, url: URL) -> HeadInfo {
         guard let raw = try? handle.read(upToCount: headByteLimit), !raw.isEmpty else {
             logger.warning("Failed to read rollout head: \(url.path, privacy: .public)")
             return HeadInfo()
         }
 
+        var info = HeadInfo()
+
+        // —— 第 0 行:session_meta(格式稳定在文件首行),取 id/cwd/startedAt ——
         // 截取第一个换行前的内容作为首行;无换行时(无结尾换行的单行小文件)整段尝试解析
         let firstLine: Data
         if let newline = raw.firstIndex(of: UInt8(ascii: "\n")) {
@@ -311,20 +322,41 @@ public actor CodexSessionMonitor {
         } else {
             firstLine = raw
         }
-
-        guard let line = try? decoder.decode(RolloutLine.self, from: firstLine),
-              line.type == "session_meta",
-              let payload = line.payload else {
-            // 首行不是 session_meta(或超出 headByteLimit 被截断),各字段置 nil,由调用方 fallback
+        if let line = try? decoder.decode(RolloutLine.self, from: firstLine),
+           line.type == "session_meta",
+           let payload = line.payload {
+            info.sessionID = payload.id ?? payload.sessionId // 真实数据两者并存,优先 id
+            info.cwd = payload.cwd
+            info.startedAt = payload.timestamp.flatMap { parseISO8601($0) } // payload.timestamp 为会话启动时间
+        } else {
+            // 首行不是 session_meta(或超出 headByteLimit 被截断),session 三元组置 nil,由调用方 fallback
             logger.warning("Rollout head is not a valid session_meta: \(url.path, privacy: .public)")
-            return HeadInfo()
         }
 
-        return HeadInfo(
-            sessionID: payload.id ?? payload.sessionId, // 真实数据两者并存,优先 id
-            cwd: payload.cwd,
-            startedAt: payload.timestamp.flatMap { parseISO8601($0) } // payload.timestamp 为会话启动时间
+        // —— 首个用户提示词 —— 真提示词是缓冲区里首个 event_msg/user_message
+        // (response_item 的 role==user 是注入的 AGENTS.md/环境上下文,会被下面的 type 判定天然跳过)。
+        // 只保留最后一个换行前的「完整行」,丢弃 256KB 边界可能截断的残行(否则整段 UTF-8 解码可能失败)。
+        if let lastNewline = raw.lastIndex(of: UInt8(ascii: "\n")),
+           let text = String(data: Data(raw.prefix(upTo: lastNewline)), encoding: .utf8) {
+            for candidate in text.split(separator: "\n", omittingEmptySubsequences: true) {
+                // 子串预筛:绝大多数行不是 user_message,先用包含判断跳过,避免逐行 JSON 解码开销(参考 parseTail)
+                guard candidate.contains("\"user_message\"") else { continue }
+                guard let parsed = try? decoder.decode(RolloutLine.self, from: Data(candidate.utf8)),
+                      parsed.type == "event_msg",
+                      parsed.payload?.type == "user_message",
+                      let message = parsed.payload?.message else { continue }
+                // 命中首个真实用户提示词,清洗后写入并停止扫描
+                info.firstPrompt = sanitizeFirstPrompt(message)
+                break
+            }
+        }
+
+        // 项目规范:记录是否提取到 firstPrompt,便于诊断「窗口不够大/格式变化」导致的漏取
+        logger.debug(
+            "Parsed rollout head \(url.path, privacy: .public): firstPrompt \(info.firstPrompt == nil ? "missing" : "captured", privacy: .public)"
         )
+
+        return info
     }
 
     /// 读文件尾 tailByteLimit 字节,从后向前找最近 lifecycle event(一个文件可能承载多轮任务)
@@ -395,6 +427,30 @@ public actor CodexSessionMonitor {
 
         // 尾部可能只有普通 message/tool 事件;保留旧 fresh-mtime 运行候选,避免长任务漏报。
         return TailInfo(lifecycleState: .running)
+    }
+
+    // MARK: - 首提示词清洗
+
+    /// 首提示词截断上限(字符数):user_message 可能是几 KB 的终端粘贴(含 ASCII art/多行),
+    /// 全文存入 mtime 缓存会把内存撑爆,故只保留首个非空行并截断到此长度。
+    private static let firstPromptMaxLength = 200
+
+    /// 清洗 user_message.message:取首个非空行 → trim 首尾空白/换行 → 超长按字符截断并加省略号。
+    /// 返回 nil 表示清洗后为空(整段皆空白/换行),调用方视为未捕获到提示词。
+    private func sanitizeFirstPrompt(_ message: String) -> String? {
+        // 终端粘贴常以空行或分隔线开头,首个 trim 后仍有内容的行才承载用户意图;
+        // .lazy 保证找到即停,不为后续每一行都分配 trim 结果
+        let firstNonEmptyLine = message
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .lazy
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+
+        guard let line = firstNonEmptyLine else { return nil }
+
+        // 超长则按字符(grapheme cluster)截断并追加省略号,控制单条缓存体积
+        guard line.count > Self.firstPromptMaxLength else { return line }
+        return "\(line.prefix(Self.firstPromptMaxLength))…"
     }
 
     // MARK: - 时间戳解析
