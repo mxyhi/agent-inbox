@@ -184,7 +184,7 @@ func disabledPromptFilterRulesDoNotHideTodos() {
 }
 
 @Test
-func regexPromptFilterRulesHideMatchingFirstPromptTodos() {
+func equalsPromptFilterRulesHideMatchingFirstPromptTodos() {
     let now = Date(timeIntervalSince1970: 10_000)
     let titleTask = makeSummary(
         id: "title-task",
@@ -193,8 +193,8 @@ func regexPromptFilterRulesHideMatchingFirstPromptTodos() {
         firstPrompt: "Generate a concise tab title for this chat."
     )
     let rule = PromptFilterRule(
-        matchType: .regex,
-        pattern: #"generate.+tab title"#
+        matchType: .equals,
+        pattern: "generate a concise tab title for this chat."
     )
 
     let snapshot = CodexStatusResolver().resolve(

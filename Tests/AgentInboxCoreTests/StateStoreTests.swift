@@ -25,8 +25,8 @@ func stateStorePersistsSettingsAndCompletedSessionsInSQLite() async throws {
             PromptFilterRule(
                 id: "rule-b",
                 isEnabled: false,
-                matchType: .regex,
-                pattern: "memory.+update",
+                matchType: .equals,
+                pattern: "memory update",
                 createdAt: Date(timeIntervalSince1970: 789),
                 updatedAt: Date(timeIntervalSince1970: 999)
             )

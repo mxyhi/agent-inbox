@@ -59,7 +59,7 @@ public enum PromptFilterField: String, Codable, CaseIterable, Sendable, Identifi
 /// firstPrompt 过滤匹配方式。
 public enum PromptFilterMatchType: String, Codable, CaseIterable, Sendable, Identifiable {
     case contains
-    case regex
+    case equals
 
     public var id: String { rawValue }
 
@@ -67,8 +67,8 @@ public enum PromptFilterMatchType: String, Codable, CaseIterable, Sendable, Iden
         switch self {
         case .contains:
             "包含"
-        case .regex:
-            "正则"
+        case .equals:
+            "等于"
         }
     }
 }
@@ -133,15 +133,8 @@ public struct PromptFilterRule: Codable, Equatable, Sendable, Identifiable {
         switch matchType {
         case .contains:
             return value.range(of: trimmedPattern, options: [.caseInsensitive, .diacriticInsensitive]) != nil
-        case .regex:
-            guard let regex = try? NSRegularExpression(
-                pattern: trimmedPattern,
-                options: [.caseInsensitive]
-            ) else {
-                return false
-            }
-            let range = NSRange(value.startIndex..<value.endIndex, in: value)
-            return regex.firstMatch(in: value, options: [], range: range) != nil
+        case .equals:
+            return value.compare(trimmedPattern, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
         }
     }
 }
