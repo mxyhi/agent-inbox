@@ -261,13 +261,25 @@ struct HoldToCompleteButton: View {
     @State private var isPressing = false
     /// 是否已完成(填绿 + 阻止松手回抽)
     @State private var didComplete = false
+    /// 鼠标悬停状态
+    @State private var isHovered = false
 
     var body: some View {
         ZStack {
-            // 底圈:默认低调灰,完成瞬间填绿
+            // 底圈:默认低调灰,悬停时(未按下)变为 rowHover 底色,完成瞬间填绿
             Circle()
-                .fill(didComplete ? DS.Colors.done : DS.Colors.buttonIdle)
+                .fill(didComplete ? DS.Colors.done : (isHovered && !isPressing ? DS.Colors.rowHover : DS.Colors.buttonIdle))
                 .frame(width: DS.Metrics.completeButtonSize, height: DS.Metrics.completeButtonSize)
+
+            // hover 提示环:仅在悬停且未按下时显示橙色细环,暗示长按操作
+            if isHovered && !isPressing && !didComplete {
+                Circle()
+                    .stroke(DS.Colors.todo.opacity(0.4), lineWidth: 1.5)
+                    .frame(
+                        width: DS.Metrics.completeButtonFrame - 1,
+                        height: DS.Metrics.completeButtonFrame - 1
+                    )
+            }
 
             // 长按进度环:12 点起笔(-90°)顺时针填充
             Circle()
@@ -283,13 +295,17 @@ struct HoldToCompleteButton: View {
                 )
                 .opacity(progress > 0 ? 1 : 0)
 
+            // checkmark 图标:悬停时(未按下)变为主要色并放大,长按时恢复默认
             Image(systemName: "checkmark")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(didComplete ? Color.white : Color.secondary)
+                .font(.system(size: isHovered && !isPressing && !didComplete ? 11 : 10, weight: .bold))
+                .foregroundStyle(didComplete ? Color.white : (isHovered && !isPressing ? Color.primary : Color.secondary))
         }
         .frame(width: DS.Metrics.completeButtonFrame, height: DS.Metrics.completeButtonFrame)
         .scaleEffect(isPressing && !reduceMotion ? 0.92 : 1)
         .contentShape(Circle())
+        .onHover { isHovered = $0 }
+        .animation(DS.Anim.hover, value: isHovered)
+        .animation(DS.Anim.hover, value: isPressing)
         .onLongPressGesture(
             minimumDuration: DS.Anim.holdToComplete,
             maximumDistance: 12,
