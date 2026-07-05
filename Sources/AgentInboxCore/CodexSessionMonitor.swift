@@ -52,8 +52,9 @@ public actor CodexSessionMonitor {
         var startedAt: Date?
     }
 
-    /// tail 解析结果:最后一个 task_complete 事件
+    /// tail 解析结果:最近 lifecycle event 与 task_complete 附带信息
     private struct TailInfo {
+        var lifecycleState: CodexTurnLifecycleState = .unknown
         var taskCompletedAt: Date?
         var lastAgentMessage: String?
     }
@@ -274,7 +275,7 @@ public actor CodexSessionMonitor {
 
     // MARK: - 单文件解析
 
-    /// 解析单个 rollout 文件:head 取 session_meta(id/cwd/startedAt),tail 取最后一个 task_complete
+    /// 解析单个 rollout 文件:head 取 session_meta(id/cwd/startedAt),tail 取最近生命周期事件
     private func parseRollout(at url: URL, modifiedAt: Date) throws -> CodexSessionSummary {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
@@ -290,6 +291,7 @@ public actor CodexSessionMonitor {
             cwd: head.cwd,
             startedAt: head.startedAt,
             modifiedAt: modifiedAt,
+            lifecycleState: tail.lifecycleState,
             taskCompletedAt: tail.taskCompletedAt,
             lastAgentMessage: tail.lastAgentMessage
         )
@@ -325,7 +327,7 @@ public actor CodexSessionMonitor {
         )
     }
 
-    /// 读文件尾 tailByteLimit 字节,从后向前找最后一个 task_complete 事件(一个文件可能承载多轮任务)
+    /// 读文件尾 tailByteLimit 字节,从后向前找最近 lifecycle event(一个文件可能承载多轮任务)
     private func parseTail(handle: FileHandle, decoder: JSONDecoder, url: URL, modifiedAt: Date) -> TailInfo {
         guard let size = try? handle.seekToEnd() else {
             logger.warning("Failed to determine rollout size: \(url.path, privacy: .public)")
@@ -354,25 +356,45 @@ public actor CodexSessionMonitor {
             return TailInfo()
         }
 
-        // 从后向前找第一个命中的(即全文最后一个)task_complete
+        // 从后向前找第一个 lifecycle 命中,即当前 turn 的最新官方状态。
         for line in text.split(separator: "\n", omittingEmptySubsequences: true).reversed() {
-            // 子串预筛:绝大多数行与 task_complete 无关,避免逐行 JSON 解码的开销
-            guard line.contains("\"task_complete\"") else { continue }
+            // 子串预筛:绝大多数行与 lifecycle 无关,避免逐行 JSON 解码的开销
+            guard
+                line.contains("\"task_started\"")
+                    || line.contains("\"turn_started\"")
+                    || line.contains("\"task_complete\"")
+                    || line.contains("\"turn_complete\"")
+                    || line.contains("\"turn_aborted\"")
+                    || line.contains("\"thread_rolled_back\"")
+            else { continue }
             guard let parsed = try? decoder.decode(RolloutLine.self, from: Data(line.utf8)),
                   parsed.type == "event_msg",
-                  parsed.payload?.type == "task_complete" else {
+                  let eventType = parsed.payload?.type else {
                 continue
             }
 
-            // 完成时间优先取事件外层 timestamp(真实数据 payload 内没有 completed_at 字段);
-            // timestamp 缺失或解析失败时 fallback 到文件 mtime
-            return TailInfo(
-                taskCompletedAt: parsed.timestamp.flatMap { parseISO8601($0) } ?? modifiedAt,
-                lastAgentMessage: parsed.payload?.lastAgentMessage
-            )
+            switch eventType {
+            case "task_started", "turn_started":
+                return TailInfo(lifecycleState: .running)
+            case "task_complete", "turn_complete":
+                // 完成时间优先取事件外层 timestamp(真实数据 payload 内没有 completed_at 字段);
+                // timestamp 缺失或解析失败时 fallback 到文件 mtime
+                return TailInfo(
+                    lifecycleState: .completed,
+                    taskCompletedAt: parsed.timestamp.flatMap { parseISO8601($0) } ?? modifiedAt,
+                    lastAgentMessage: parsed.payload?.lastAgentMessage
+                )
+            case "turn_aborted":
+                return TailInfo(lifecycleState: .aborted)
+            case "thread_rolled_back":
+                return TailInfo(lifecycleState: .rolledBack)
+            default:
+                continue
+            }
         }
 
-        return TailInfo()
+        // 尾部可能只有普通 message/tool 事件;保留旧 fresh-mtime 运行候选,避免长任务漏报。
+        return TailInfo(lifecycleState: .running)
     }
 
     // MARK: - 时间戳解析

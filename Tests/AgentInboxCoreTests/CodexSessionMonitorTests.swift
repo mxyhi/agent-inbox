@@ -105,6 +105,31 @@ func monitorLeavesCompletionNilWhenNoTaskComplete() async throws {
 }
 
 @Test
+func monitorParsesLatestTurnLifecycleEvent() async throws {
+    let root = try makeTemporarySessionsRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    // Esc 停止后 Codex 会写 turn_aborted,随后 thread_rolled_back;最新 lifecycle 必须覆盖旧的 task_started。
+    let body = """
+    {"timestamp":"2026-07-04T17:10:00.000Z","type":"session_meta","payload":{"id":"session-aborted","timestamp":"2026-07-04T17:10:00.000Z","cwd":"/tmp/aborted"}}
+    {"timestamp":"2026-07-04T17:10:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+    {"timestamp":"2026-07-04T17:10:05.000Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-1","reason":"interrupted","completed_at":1783185005,"duration_ms":4000}}
+    {"timestamp":"2026-07-04T17:10:05.050Z","type":"event_msg","payload":{"type":"thread_rolled_back","num_turns":1}}
+    """
+    try writeRollout(
+        root: root,
+        name: "rollout-2026-07-04T17-10-00-aborted.jsonl",
+        body: body,
+        mtimeEpoch: 1_783_185_005
+    )
+
+    let summary = try #require(await CodexSessionMonitor(sessionsRoot: root).scan().first)
+    #expect(summary.lifecycleState == .rolledBack)
+    #expect(summary.taskCompletedAt == nil)
+    #expect(!summary.isTaskComplete)
+}
+
+@Test
 func monitorFallsBackToFileNameWhenHeadIsNotSessionMeta() async throws {
     let root = try makeTemporarySessionsRoot()
     defer { try? FileManager.default.removeItem(at: root) }

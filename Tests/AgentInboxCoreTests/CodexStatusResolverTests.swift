@@ -6,6 +6,7 @@ import Testing
 private func makeSummary(
     id: String,
     modifiedAt: Date,
+    lifecycleState: CodexTurnLifecycleState? = nil,
     taskCompletedAt: Date? = nil,
     lastAgentMessage: String? = nil
 ) -> CodexSessionSummary {
@@ -15,6 +16,7 @@ private func makeSummary(
         cwd: "/tmp/project-\(id)",
         startedAt: modifiedAt.addingTimeInterval(-60),
         modifiedAt: modifiedAt,
+        lifecycleState: lifecycleState,
         taskCompletedAt: taskCompletedAt,
         lastAgentMessage: lastAgentMessage
     )
@@ -139,6 +141,41 @@ func staleIncompleteSessionIsDroppedFromRunning() {
 
     #expect(snapshot.running.map(\.id) == ["fresh"])
     #expect(snapshot.todos.isEmpty)
+}
+
+@Test
+func abortedAndRolledBackSessionsAreDroppedFromRunningAndTodos() {
+    let now = Date(timeIntervalSince1970: 10_000)
+    let started = makeSummary(
+        id: "started",
+        modifiedAt: now.addingTimeInterval(-5),
+        lifecycleState: .running
+    )
+    let completed = makeSummary(
+        id: "completed",
+        modifiedAt: now.addingTimeInterval(-10),
+        lifecycleState: .completed,
+        taskCompletedAt: now.addingTimeInterval(-10)
+    )
+    let aborted = makeSummary(
+        id: "aborted",
+        modifiedAt: now.addingTimeInterval(-3),
+        lifecycleState: .aborted
+    )
+    let rolledBack = makeSummary(
+        id: "rolled-back",
+        modifiedAt: now.addingTimeInterval(-2),
+        lifecycleState: .rolledBack
+    )
+
+    let snapshot = CodexStatusResolver(staleRunningInterval: 120).resolve(
+        summaries: [started, completed, aborted, rolledBack],
+        completedSessionIDs: [],
+        now: now
+    )
+
+    #expect(snapshot.running.map(\.id) == ["started"])
+    #expect(snapshot.todos.map(\.id) == ["completed"])
 }
 
 @Test

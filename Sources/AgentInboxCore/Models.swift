@@ -33,8 +33,17 @@ public enum PinMode: String, Codable, CaseIterable, Sendable, Identifiable {
     }
 }
 
+/// Codex turn 生命周期状态,来自 rollout 尾部最近的 lifecycle event。
+public enum CodexTurnLifecycleState: String, Codable, Equatable, Sendable {
+    case running
+    case completed
+    case aborted
+    case rolledBack
+    case unknown
+}
+
 /// 单个 Codex 会话摘要
-/// 由 rollout 文件头部 `session_meta`(id/cwd/startedAt)与尾部 `task_complete`(完成时间/最后消息)合并而来
+/// 由 rollout 文件头部 `session_meta` 与尾部生命周期事件合并而来。
 public struct CodexSessionSummary: Codable, Equatable, Sendable, Identifiable {
     public let id: String
     public let filePath: String
@@ -44,6 +53,8 @@ public struct CodexSessionSummary: Codable, Equatable, Sendable, Identifiable {
     public let startedAt: Date?
     /// rollout 文件最后修改时间,用于活跃度判定
     public let modifiedAt: Date
+    /// 最近的 turn 生命周期;aborted/rolledBack 不应继续显示为运行中
+    public let lifecycleState: CodexTurnLifecycleState
     /// task_complete 事件时间;nil 表示任务尚未结束
     public let taskCompletedAt: Date?
     /// task_complete.last_agent_message,待办行的摘要正文
@@ -55,6 +66,7 @@ public struct CodexSessionSummary: Codable, Equatable, Sendable, Identifiable {
         cwd: String?,
         startedAt: Date?,
         modifiedAt: Date,
+        lifecycleState: CodexTurnLifecycleState? = nil,
         taskCompletedAt: Date?,
         lastAgentMessage: String?
     ) {
@@ -63,6 +75,7 @@ public struct CodexSessionSummary: Codable, Equatable, Sendable, Identifiable {
         self.cwd = cwd
         self.startedAt = startedAt
         self.modifiedAt = modifiedAt
+        self.lifecycleState = lifecycleState ?? (taskCompletedAt == nil ? .running : .completed)
         self.taskCompletedAt = taskCompletedAt
         self.lastAgentMessage = lastAgentMessage
     }
