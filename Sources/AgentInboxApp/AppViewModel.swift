@@ -12,10 +12,12 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var isPanelVisible = false
     @Published private(set) var promptFilterRules: [PromptFilterRule] = []
     @Published var pinMode: PinMode = .todoOnly
+    @Published var openSessionConfig: OpenSessionConfig = OpenSessionConfig()
 
     private let monitor: CodexSessionMonitor
     private let resolver: CodexStatusResolver
     private let stateStore: StateStore
+    private let executor: OpenSessionExecutor
     private let logger = Logger(subsystem: "agent-inbox", category: "AppViewModel")
     private var persistedState = PersistedState()
     private var reconcileTask: Task<Void, Never>?
@@ -27,11 +29,13 @@ final class AppViewModel: ObservableObject {
     init(
         monitor: CodexSessionMonitor = CodexSessionMonitor(),
         resolver: CodexStatusResolver = CodexStatusResolver(),
-        stateStore: StateStore = StateStore()
+        stateStore: StateStore = StateStore(),
+        executor: OpenSessionExecutor = OpenSessionExecutor()
     ) {
         self.monitor = monitor
         self.resolver = resolver
         self.stateStore = stateStore
+        self.executor = executor
     }
 
     // MARK: - 生命周期
@@ -41,8 +45,9 @@ final class AppViewModel: ObservableObject {
         persistedState = await stateStore.load()
         pinMode = persistedState.pinMode
         promptFilterRules = persistedState.promptFilterRules
+        openSessionConfig = persistedState.openSessionConfig
         logger.info(
-            "持久化状态已加载,pinMode=\(self.pinMode.rawValue, privacy: .public),filterRules=\(self.promptFilterRules.count)"
+            "持久化状态已加载,pinMode=\(self.pinMode.rawValue, privacy: .public),filterRules=\(self.promptFilterRules.count),openMethod=\(self.openSessionConfig.method.rawValue, privacy: .public)"
         )
     }
 
@@ -109,21 +114,21 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    /// 打开会话工作目录(焦点卡「打开↗」)—— cwd 缺失时退化为在 Finder 中定位 rollout 文件
+    /// 打开会话工作目录 —— 根据配置使用不同方式打开
     func openSession(id: String) {
         guard let session = snapshot.todos.first(where: { $0.id == id })
             ?? snapshot.running.first(where: { $0.id == id }) else {
             logger.warning("openSession 未找到会话: \(id, privacy: .public)")
+            showNotification(title: "打开失败", message: "未找到会话 \(id)")
             return
         }
 
-        if let cwd = session.cwd, !cwd.isEmpty {
-            NSWorkspace.shared.open(URL(filePath: cwd))
-            logger.info("打开会话目录: \(cwd, privacy: .public)")
-        } else {
-            // cwd 缺失:在 Finder 中高亮 rollout 文件本身,至少能定位到会话
-            NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: session.filePath)])
-            logger.info("cwd 缺失,Finder 定位 rollout: \(session.filePath, privacy: .public)")
+        do {
+            try executor.execute(session: session, config: openSessionConfig)
+            logger.info("成功打开会话: \(id, privacy: .public), method=\(self.openSessionConfig.method.rawValue, privacy: .public)")
+        } catch {
+            logger.error("打开会话失败: \(String(describing: error), privacy: .public)")
+            showNotification(title: "打开会话失败", message: error.localizedDescription)
         }
     }
 
@@ -159,6 +164,18 @@ final class AppViewModel: ObservableObject {
         pinMode = mode
         persistedState.pinMode = mode
         logger.info("置顶模式变更: \(mode.rawValue, privacy: .public)")
+
+        Task {
+            await stateStore.save(persistedState)
+        }
+    }
+
+    func setOpenSessionConfig(_ config: OpenSessionConfig) {
+        guard openSessionConfig != config else { return }
+
+        openSessionConfig = config
+        persistedState.openSessionConfig = config
+        logger.info("会话打开配置变更: method=\(config.method.rawValue, privacy: .public)")
 
         Task {
             await stateStore.save(persistedState)
@@ -320,6 +337,15 @@ final class AppViewModel: ObservableObject {
     }
 
     // MARK: - 内部
+
+    /// 显示系统通知
+    private func showNotification(title: String, message: String) {
+        let notification = NSUserNotification()
+        notification.title = title
+        notification.informativeText = message
+        notification.soundName = NSUserNotificationDefaultSoundName
+        NSUserNotificationCenter.default.deliver(notification)
+    }
 
     /// 扫描 → 解析 → 发布(仅在快照变化时触发 UI 更新)
     private func refresh() async {

@@ -233,6 +233,77 @@ public struct PanelAnchor: Codable, Equatable, Sendable {
     }
 }
 
+/// 会话打开方式
+public enum OpenSessionMethod: String, Codable, CaseIterable, Sendable, Identifiable {
+    case finder       // Finder 中打开目录（默认）
+    case terminal     // Terminal.app 中打开
+    case vscode       // VS Code 中打开（需已安装 code 命令）
+    case custom       // 自定义 shell 命令
+
+    public var id: String { rawValue }
+
+    /// 设置界面展示名称
+    public var label: String {
+        switch self {
+        case .finder:
+            "Finder"
+        case .terminal:
+            "终端"
+        case .vscode:
+            "VS Code"
+        case .custom:
+            "自定义命令"
+        }
+    }
+
+    /// 方式说明（设置界面副标题）
+    public var description: String {
+        switch self {
+        case .finder:
+            "在 Finder 中打开工作目录"
+        case .terminal:
+            "在终端中打开工作目录"
+        case .vscode:
+            "使用 VS Code 打开工作目录"
+        case .custom:
+            "执行自定义 shell 命令"
+        }
+    }
+}
+
+/// 会话打开配置
+public struct OpenSessionConfig: Codable, Equatable, Sendable {
+    /// 打开方式
+    public var method: OpenSessionMethod
+    /// 自定义命令模板（仅当 method == .custom 时生效）
+    /// 支持变量：$session_id, $cwd, $file_path, $project_name
+    public var customCommand: String
+
+    public init(
+        method: OpenSessionMethod = .finder,
+        customCommand: String = ""
+    ) {
+        self.method = method
+        self.customCommand = customCommand
+    }
+
+    /// 支持的模板变量列表（用于 UI 提示）
+    public static let supportedVariables: [(name: String, description: String)] = [
+        ("$session_id", "会话 ID"),
+        ("$cwd", "工作目录路径"),
+        ("$file_path", "rollout 文件路径"),
+        ("$project_name", "项目名称")
+    ]
+
+    /// 示例命令模板
+    public static let exampleCommands: [String] = [
+        "open -a Terminal \"$cwd\"",
+        "code \"$cwd\"",
+        "cursor \"$cwd\"",
+        "echo \"Opening session $session_id at $cwd\""
+    ]
+}
+
 /// 持久化状态(SQLite)
 public struct PersistedState: Codable, Equatable, Sendable {
     public var pinMode: PinMode
@@ -243,18 +314,22 @@ public struct PersistedState: Codable, Equatable, Sendable {
     public var panelAnchor: PanelAnchor?
     /// 用户配置的 firstPrompt 过滤规则;命中后不进入待办,但不写 completed_sessions。
     public var promptFilterRules: [PromptFilterRule]
+    /// 会话打开配置
+    public var openSessionConfig: OpenSessionConfig
 
     public init(
         pinMode: PinMode = .todoOnly,
         completedSessionIDs: Set<String> = [],
         trackingStartedAt: Date = Date(),
         panelAnchor: PanelAnchor? = nil,
-        promptFilterRules: [PromptFilterRule] = []
+        promptFilterRules: [PromptFilterRule] = [],
+        openSessionConfig: OpenSessionConfig = OpenSessionConfig()
     ) {
         self.pinMode = pinMode
         self.completedSessionIDs = completedSessionIDs
         self.trackingStartedAt = trackingStartedAt
         self.panelAnchor = panelAnchor
         self.promptFilterRules = promptFilterRules
+        self.openSessionConfig = openSessionConfig
     }
 }

@@ -8,6 +8,7 @@ import SwiftUI
 /// 后续新增设置项:在此追加一个 case,再补一个对应的 *SettingsSection 子视图即可
 enum SettingsCategory: String, CaseIterable, Identifiable, Hashable {
     case panel   // 浮窗行为
+    case open    // 打开方式
     case data    // 数据来源
     case filter  // firstPrompt 过滤
     case about   // 关于
@@ -18,6 +19,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable, Hashable {
     var label: String {
         switch self {
         case .panel: return "浮窗"
+        case .open: return "打开方式"
         case .data: return "数据"
         case .filter: return "过滤"
         case .about: return "关于"
@@ -28,6 +30,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable, Hashable {
     var systemImage: String {
         switch self {
         case .panel: return "macwindow"
+        case .open: return "arrow.up.forward.square"
         case .data: return "externaldrive"
         case .filter: return "line.3.horizontal.decrease.circle"
         case .about: return "info.circle"
@@ -73,6 +76,8 @@ struct SettingsView: View {
         switch category {
         case .panel:
             PanelSettingsSection(viewModel: viewModel)
+        case .open:
+            OpenSettingsSection(viewModel: viewModel)
         case .data:
             DataSettingsSection()
         case .filter:
@@ -137,6 +142,162 @@ private struct DataSettingsSection: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// 打开方式配置
+private struct OpenSettingsSection: View {
+    @ObservedObject var viewModel: AppViewModel
+
+    @State private var method: OpenSessionMethod
+    @State private var customCommand: String
+    @State private var isTestingCommand = false
+    @State private var testResult: String?
+
+    init(viewModel: AppViewModel) {
+        self.viewModel = viewModel
+        _method = State(initialValue: viewModel.openSessionConfig.method)
+        _customCommand = State(initialValue: viewModel.openSessionConfig.customCommand)
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                // 打开方式选择器
+                Picker("打开方式", selection: $method) {
+                    ForEach(OpenSessionMethod.allCases) { method in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(method.label)
+                                .font(.body)
+                            Text(method.description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .tag(method)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .onChange(of: method) { _, newValue in
+                    saveConfig()
+                }
+
+                // 自定义命令输入框（仅在选择自定义时显示）
+                if method == .custom {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("自定义命令")
+                            .font(.headline)
+
+                        TextField("输入 shell 命令模板", text: $customCommand, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                            .lineLimit(3...6)
+                            .onSubmit {
+                                saveConfig()
+                            }
+
+                        // 变量说明
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("支持的变量：")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            ForEach(OpenSessionConfig.supportedVariables, id: \.name) { variable in
+                                HStack(spacing: 8) {
+                                    Text(variable.name)
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.blue)
+                                    Text("—")
+                                        .foregroundStyle(.tertiary)
+                                    Text(variable.description)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+
+                        // 示例命令
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("示例命令：")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            ForEach(OpenSessionConfig.exampleCommands, id: \.self) { example in
+                                Text(example)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.tertiary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        .padding(.vertical, 4)
+
+                        // 测试按钮
+                        HStack {
+                            Button("测试命令") {
+                                testCommand()
+                            }
+                            .disabled(customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isTestingCommand)
+
+                            if isTestingCommand {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .padding(.leading, 8)
+                            }
+
+                            if let result = testResult {
+                                Text(result)
+                                    .font(.caption)
+                                    .foregroundStyle(result.contains("成功") ? .green : .red)
+                                    .padding(.leading, 8)
+                            }
+                        }
+                    }
+                }
+            } footer: {
+                Text("配置如何打开会话工作目录。更改会立即保存。")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// 保存配置到 ViewModel
+    private func saveConfig() {
+        let config = OpenSessionConfig(
+            method: method,
+            customCommand: customCommand
+        )
+        viewModel.setOpenSessionConfig(config)
+        testResult = nil // 清空测试结果
+    }
+
+    /// 测试自定义命令（使用当前焦点会话）
+    private func testCommand() {
+        guard method == .custom else { return }
+        guard let testSession = viewModel.snapshot.todos.first ?? viewModel.snapshot.running.first else {
+            testResult = "❌ 没有可用的测试会话"
+            return
+        }
+
+        isTestingCommand = true
+        testResult = nil
+
+        Task { @MainActor in
+            do {
+                let executor = OpenSessionExecutor()
+                let config = OpenSessionConfig(method: .custom, customCommand: customCommand)
+                try executor.execute(session: testSession, config: config)
+                testResult = "✓ 命令执行成功"
+            } catch {
+                testResult = "❌ \(error.localizedDescription)"
+            }
+            isTestingCommand = false
+
+            // 3 秒后清空测试结果
+            try? await Task.sleep(for: .seconds(3))
+            testResult = nil
+        }
     }
 }
 
