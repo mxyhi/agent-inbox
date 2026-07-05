@@ -215,7 +215,7 @@ struct RunningRow: View {
 
 // MARK: - 打开按钮(焦点卡次动作)
 
-/// 「打开↗」—— 弱 ghost 文字按钮,hover 才浮出淡底,跳到会话工作目录。
+/// 「↗」—— 纯图标按钮,hover 才浮出淡底,跳到会话工作目录。
 struct OpenButton: View {
     let action: () -> Void
 
@@ -223,19 +223,14 @@ struct OpenButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 3) {
-                Text("打开")
-                Image(systemName: "arrow.up.forward")
-                    .font(.system(size: 9, weight: .semibold))
-            }
-            .font(DS.Fonts.actionOpen)
-            .foregroundStyle(isHovered ? .primary : .secondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isHovered ? DS.Colors.rowHover : .clear)
-            )
+            Image(systemName: "arrow.up.forward")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(isHovered ? .primary : .secondary)
+                .padding(6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isHovered ? DS.Colors.rowHover : .clear)
+                )
         }
         .buttonStyle(.plain)
         .animation(DS.Anim.hover, value: isHovered)
@@ -263,9 +258,13 @@ struct HoldToCompleteButton: View {
     @State private var didComplete = false
     /// 鼠标悬停状态
     @State private var isHovered = false
+    /// 完成反馈触发标记
+    @State private var feedbackTrigger = false
 
     var body: some View {
         ZStack {
+            // 完成反馈图标 —— 叠在按钮上方
+            CompletionFeedback(trigger: feedbackTrigger)
             // 底圈:默认低调灰,悬停时(未按下)变为 rowHover 底色,完成瞬间填绿
             Circle()
                 .fill(didComplete ? DS.Colors.done : (isHovered && !isPressing ? DS.Colors.rowHover : DS.Colors.buttonIdle))
@@ -329,10 +328,11 @@ struct HoldToCompleteButton: View {
         }
     }
 
-    /// 按满 / 无障碍触发:震一下 + 填绿,再通知上层从快照剔除(乐观更新)。
+    /// 按满 / 无障碍触发:震一下 + 填绿 + 弹出 ✓ 图标,再通知上层从快照剔除(乐观更新)。
     private func triggerComplete() {
         guard !didComplete else { return }
         didComplete = true
+        feedbackTrigger.toggle() // 触发完成反馈动画
         NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
         withAnimation(DS.Anim.hover) { progress = 1 }
         action()
