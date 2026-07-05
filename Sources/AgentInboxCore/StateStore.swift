@@ -27,13 +27,15 @@ public actor StateStore {
             let trackingStartedAt = try ensureTrackingStartedAt(database)
             let completedSessionIDs = try readCompletedSessionIDs(database)
             let panelAnchor = try readPanelAnchor(database)
+            let promptFilterRules = try readPromptFilterRules(database)
             logger.info("Loaded SQLite state from \(self.databaseURL.path, privacy: .public)")
 
             return PersistedState(
                 pinMode: pinMode,
                 completedSessionIDs: completedSessionIDs,
                 trackingStartedAt: trackingStartedAt,
-                panelAnchor: panelAnchor
+                panelAnchor: panelAnchor,
+                promptFilterRules: promptFilterRules
             )
         } catch {
             logger.error("Failed to load SQLite state, using default: \(String(describing: error), privacy: .public)")
@@ -53,6 +55,7 @@ public actor StateStore {
                 try saveTrackingStartedAt(state.trackingStartedAt, database)
                 try savePanelAnchor(state.panelAnchor, database)
                 try replaceCompletedSessions(state.completedSessionIDs, database)
+                try replacePromptFilterRules(state.promptFilterRules, database)
                 try execute(database, "COMMIT")
                 logger.info("Saved SQLite state to \(self.databaseURL.path, privacy: .public)")
             } catch {
@@ -101,6 +104,23 @@ public actor StateStore {
             completed_at REAL NOT NULL
         )
         """)
+
+        try executeRaw(database, """
+        CREATE TABLE IF NOT EXISTS filter_rules (
+            id TEXT PRIMARY KEY NOT NULL,
+            enabled INTEGER NOT NULL,
+            field TEXT NOT NULL,
+            match_type TEXT NOT NULL,
+            pattern TEXT NOT NULL,
+            action TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """)
+
+        // 移除历史遗留的 name 列:规则由 pattern 直接标识,name 冗余。
+        // 旧库有该列时 DROP;新库无此列,ALTER 失败可安全忽略。
+        try? executeRaw(database, "ALTER TABLE filter_rules DROP COLUMN name")
     }
 
     private func readPinMode(_ database: OpaquePointer) throws -> PinMode? {
@@ -210,6 +230,68 @@ public actor StateStore {
         }
     }
 
+    private func readPromptFilterRules(_ database: OpaquePointer) throws -> [PromptFilterRule] {
+        var statement: OpaquePointer?
+        let sql = """
+        SELECT id, enabled, field, match_type, pattern, action, created_at, updated_at
+        FROM filter_rules
+        ORDER BY created_at ASC
+        """
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw SQLiteStoreError.prepareFailed(message: String(cString: sqlite3_errmsg(database)))
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var rules: [PromptFilterRule] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let id = textColumn(statement, 0),
+                  let field = textColumn(statement, 2).flatMap(PromptFilterField.init(rawValue:)),
+                  let matchType = textColumn(statement, 3).flatMap(PromptFilterMatchType.init(rawValue:)),
+                  let pattern = textColumn(statement, 4),
+                  let action = textColumn(statement, 5).flatMap(PromptFilterAction.init(rawValue:)) else {
+                logger.warning("Ignoring malformed filter_rules row")
+                continue
+            }
+
+            rules.append(PromptFilterRule(
+                id: id,
+                isEnabled: sqlite3_column_int(statement, 1) != 0,
+                field: field,
+                matchType: matchType,
+                pattern: pattern,
+                action: action,
+                createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 6)),
+                updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 7))
+            ))
+        }
+        return rules
+    }
+
+    private func replacePromptFilterRules(_ rules: [PromptFilterRule], _ database: OpaquePointer) throws {
+        try execute(database, "DELETE FROM filter_rules")
+
+        for rule in rules {
+            try execute(
+                database,
+                """
+                INSERT INTO filter_rules(
+                    id, enabled, field, match_type, pattern, action, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                bindings: [
+                    .text(rule.id),
+                    .integer(rule.isEnabled ? 1 : 0),
+                    .text(rule.field.rawValue),
+                    .text(rule.matchType.rawValue),
+                    .text(rule.pattern),
+                    .text(rule.action.rawValue),
+                    .double(rule.createdAt.timeIntervalSince1970),
+                    .double(rule.updatedAt.timeIntervalSince1970)
+                ]
+            )
+        }
+    }
+
     private func execute(_ database: OpaquePointer, _ sql: String, bindings: [SQLiteBinding] = []) throws {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -245,6 +327,13 @@ public actor StateStore {
         return String(cString: cString)
     }
 
+    private func textColumn(_ statement: OpaquePointer?, _ index: Int32) -> String? {
+        guard let cString = sqlite3_column_text(statement, index) else {
+            return nil
+        }
+        return String(cString: cString)
+    }
+
     private func bind(_ bindings: [SQLiteBinding], to statement: OpaquePointer?, database: OpaquePointer) throws {
         for (index, binding) in bindings.enumerated() {
             let position = Int32(index + 1)
@@ -253,6 +342,8 @@ public actor StateStore {
                 sqlite3_bind_text(statement, position, value, -1, sqliteTransient)
             case let .double(value):
                 sqlite3_bind_double(statement, position, value)
+            case let .integer(value):
+                sqlite3_bind_int64(statement, position, value)
             }
 
             guard result == SQLITE_OK else {
@@ -277,6 +368,7 @@ public actor StateStore {
 private enum SQLiteBinding {
     case text(String)
     case double(Double)
+    case integer(Int64)
 }
 
 private enum SQLiteStoreError: Error {

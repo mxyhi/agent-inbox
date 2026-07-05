@@ -12,7 +12,25 @@ func stateStorePersistsSettingsAndCompletedSessionsInSQLite() async throws {
     let state = PersistedState(
         pinMode: .todoOnly,
         completedSessionIDs: ["session-a", "session-b"],
-        trackingStartedAt: Date(timeIntervalSince1970: 123_456)
+        trackingStartedAt: Date(timeIntervalSince1970: 123_456),
+        promptFilterRules: [
+            PromptFilterRule(
+                id: "rule-a",
+                isEnabled: true,
+                matchType: .contains,
+                pattern: "concise tab title",
+                createdAt: Date(timeIntervalSince1970: 123),
+                updatedAt: Date(timeIntervalSince1970: 456)
+            ),
+            PromptFilterRule(
+                id: "rule-b",
+                isEnabled: false,
+                matchType: .regex,
+                pattern: "memory.+update",
+                createdAt: Date(timeIntervalSince1970: 789),
+                updatedAt: Date(timeIntervalSince1970: 999)
+            )
+        ]
     )
 
     await store.save(state)
@@ -23,6 +41,7 @@ func stateStorePersistsSettingsAndCompletedSessionsInSQLite() async throws {
     #expect(loaded.completedSessionIDs == ["session-a", "session-b"])
     #expect(abs(loaded.trackingStartedAt.timeIntervalSince1970 - 123_456) < 0.001)
     #expect(loaded.panelAnchor == nil) // 未保存过锚点 → nil
+    #expect(loaded.promptFilterRules == state.promptFilterRules)
     #expect(FileManager.default.fileExists(atPath: databaseURL.path))
 }
 

@@ -8,7 +8,8 @@ private func makeSummary(
     modifiedAt: Date,
     lifecycleState: CodexTurnLifecycleState? = nil,
     taskCompletedAt: Date? = nil,
-    lastAgentMessage: String? = nil
+    lastAgentMessage: String? = nil,
+    firstPrompt: String? = nil
 ) -> CodexSessionSummary {
     CodexSessionSummary(
         id: id,
@@ -18,7 +19,8 @@ private func makeSummary(
         modifiedAt: modifiedAt,
         lifecycleState: lifecycleState,
         taskCompletedAt: taskCompletedAt,
-        lastAgentMessage: lastAgentMessage
+        lastAgentMessage: lastAgentMessage,
+        firstPrompt: firstPrompt
     )
 }
 
@@ -124,6 +126,85 @@ func todosAreAllKeptAndSortedByCompletionTime() {
     #expect(snapshot.running.isEmpty)
     #expect(snapshot.hasTodo)
     #expect(!snapshot.isActive)
+}
+
+@Test
+func promptFilterRulesHideMatchingFirstPromptTodos() {
+    let now = Date(timeIntervalSince1970: 10_000)
+    let titleTask = makeSummary(
+        id: "title-task",
+        modifiedAt: now.addingTimeInterval(-50),
+        taskCompletedAt: now.addingTimeInterval(-50),
+        firstPrompt: "Generate a concise tab title for this chat."
+    )
+    let realTask = makeSummary(
+        id: "real-task",
+        modifiedAt: now.addingTimeInterval(-40),
+        taskCompletedAt: now.addingTimeInterval(-40),
+        firstPrompt: "修复生产告警"
+    )
+    let rule = PromptFilterRule(
+        matchType: .contains,
+        pattern: "concise tab title"
+    )
+
+    let snapshot = CodexStatusResolver().resolve(
+        summaries: [titleTask, realTask],
+        completedSessionIDs: [],
+        promptFilterRules: [rule],
+        now: now
+    )
+
+    #expect(snapshot.todos.map(\.id) == ["real-task"])
+}
+
+@Test
+func disabledPromptFilterRulesDoNotHideTodos() {
+    let now = Date(timeIntervalSince1970: 10_000)
+    let todo = makeSummary(
+        id: "title-task",
+        modifiedAt: now.addingTimeInterval(-50),
+        taskCompletedAt: now.addingTimeInterval(-50),
+        firstPrompt: "Generate a concise tab title for this chat."
+    )
+    let disabledRule = PromptFilterRule(
+        isEnabled: false,
+        matchType: .contains,
+        pattern: "concise tab title"
+    )
+
+    let snapshot = CodexStatusResolver().resolve(
+        summaries: [todo],
+        completedSessionIDs: [],
+        promptFilterRules: [disabledRule],
+        now: now
+    )
+
+    #expect(snapshot.todos.map(\.id) == ["title-task"])
+}
+
+@Test
+func regexPromptFilterRulesHideMatchingFirstPromptTodos() {
+    let now = Date(timeIntervalSince1970: 10_000)
+    let titleTask = makeSummary(
+        id: "title-task",
+        modifiedAt: now.addingTimeInterval(-50),
+        taskCompletedAt: now.addingTimeInterval(-50),
+        firstPrompt: "Generate a concise tab title for this chat."
+    )
+    let rule = PromptFilterRule(
+        matchType: .regex,
+        pattern: #"generate.+tab title"#
+    )
+
+    let snapshot = CodexStatusResolver().resolve(
+        summaries: [titleTask],
+        completedSessionIDs: [],
+        promptFilterRules: [rule],
+        now: now
+    )
+
+    #expect(snapshot.todos.isEmpty)
 }
 
 @Test

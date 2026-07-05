@@ -25,6 +25,7 @@ public struct CodexStatusResolver: Sendable {
     public func resolve(
         summaries: [CodexSessionSummary],
         completedSessionIDs: Set<String>,
+        promptFilterRules: [PromptFilterRule] = [],
         trackingStartedAt: Date = .distantPast,
         now: Date = Date()
     ) -> AgentSnapshot {
@@ -39,6 +40,7 @@ public struct CodexStatusResolver: Sendable {
             .filter {
                 $0.lifecycleState == .completed
                     && !completedSessionIDs.contains($0.id)
+                    && !shouldHideFromTodos($0, rules: promptFilterRules)
                     && ($0.taskCompletedAt ?? .distantPast) >= trackingStartedAt
                     && now.timeIntervalSince($0.taskCompletedAt ?? .distantPast) <= todoRetentionInterval
             }
@@ -49,5 +51,9 @@ public struct CodexStatusResolver: Sendable {
             running: running,
             hasCompletedHistory: !completedSessionIDs.isEmpty
         )
+    }
+
+    private func shouldHideFromTodos(_ summary: CodexSessionSummary, rules: [PromptFilterRule]) -> Bool {
+        rules.contains { $0.matches(summary) }
     }
 }

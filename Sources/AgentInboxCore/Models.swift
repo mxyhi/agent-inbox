@@ -42,6 +42,110 @@ public enum CodexTurnLifecycleState: String, Codable, Equatable, Sendable {
     case unknown
 }
 
+/// prompt 过滤字段。首版只支持 firstPrompt,后续有真实 metadata 再扩展。
+public enum PromptFilterField: String, Codable, CaseIterable, Sendable, Identifiable {
+    case firstPrompt
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .firstPrompt:
+            "首个提示词"
+        }
+    }
+}
+
+/// firstPrompt 过滤匹配方式。
+public enum PromptFilterMatchType: String, Codable, CaseIterable, Sendable, Identifiable {
+    case contains
+    case regex
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .contains:
+            "包含"
+        case .regex:
+            "正则"
+        }
+    }
+}
+
+/// 过滤命中后的动作。首版只隐藏待办,不把会话标记完成。
+public enum PromptFilterAction: String, Codable, CaseIterable, Sendable, Identifiable {
+    case hideFromTodos
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .hideFromTodos:
+            "不进入待办"
+        }
+    }
+}
+
+/// 用户配置的 firstPrompt 过滤规则。
+public struct PromptFilterRule: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public var isEnabled: Bool
+    public var field: PromptFilterField
+    public var matchType: PromptFilterMatchType
+    public var pattern: String
+    public var action: PromptFilterAction
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: String = UUID().uuidString,
+        isEnabled: Bool = true,
+        field: PromptFilterField = .firstPrompt,
+        matchType: PromptFilterMatchType = .contains,
+        pattern: String,
+        action: PromptFilterAction = .hideFromTodos,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.isEnabled = isEnabled
+        self.field = field
+        self.matchType = matchType
+        self.pattern = pattern
+        self.action = action
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    public func matches(_ summary: CodexSessionSummary) -> Bool {
+        guard isEnabled, action == .hideFromTodos else { return false }
+
+        let value = switch field {
+        case .firstPrompt:
+            summary.firstPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        guard !value.isEmpty else { return false }
+
+        let trimmedPattern = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPattern.isEmpty else { return false }
+
+        switch matchType {
+        case .contains:
+            return value.range(of: trimmedPattern, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        case .regex:
+            guard let regex = try? NSRegularExpression(
+                pattern: trimmedPattern,
+                options: [.caseInsensitive]
+            ) else {
+                return false
+            }
+            let range = NSRange(value.startIndex..<value.endIndex, in: value)
+            return regex.firstMatch(in: value, options: [], range: range) != nil
+        }
+    }
+}
+
 /// 单个 Codex 会话摘要
 /// 由 rollout 文件头部 `session_meta` 与尾部生命周期事件合并而来。
 public struct CodexSessionSummary: Codable, Equatable, Sendable, Identifiable {
@@ -144,16 +248,20 @@ public struct PersistedState: Codable, Equatable, Sendable {
     public var trackingStartedAt: Date
     /// nil = 从未拖动过,使用默认右上角位置
     public var panelAnchor: PanelAnchor?
+    /// 用户配置的 firstPrompt 过滤规则;命中后不进入待办,但不写 completed_sessions。
+    public var promptFilterRules: [PromptFilterRule]
 
     public init(
         pinMode: PinMode = .todoOnly,
         completedSessionIDs: Set<String> = [],
         trackingStartedAt: Date = Date(),
-        panelAnchor: PanelAnchor? = nil
+        panelAnchor: PanelAnchor? = nil,
+        promptFilterRules: [PromptFilterRule] = []
     ) {
         self.pinMode = pinMode
         self.completedSessionIDs = completedSessionIDs
         self.trackingStartedAt = trackingStartedAt
         self.panelAnchor = panelAnchor
+        self.promptFilterRules = promptFilterRules
     }
 }
