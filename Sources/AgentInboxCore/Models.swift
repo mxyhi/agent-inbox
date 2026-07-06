@@ -304,6 +304,62 @@ public struct OpenSessionConfig: Codable, Equatable, Sendable {
     ]
 }
 
+/// 自动更新网络代理配置。空地址表示不启用;非空地址必须是带协议、主机、端口的代理 URL。
+public struct NetworkProxyConfig: Codable, Equatable, Sendable {
+    public var urlString: String
+
+    public init(
+        urlString: String = ""
+    ) {
+        self.urlString = urlString
+    }
+
+    /// 去除输入框空白;持久化和网络层都使用这份规范值。
+    public var normalizedURLString: String {
+        urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    public var isEmpty: Bool {
+        normalizedURLString.isEmpty
+    }
+
+    /// 只有配置完整时才向 URLSession 注入代理,避免半截配置破坏更新检查。
+    public var isUsable: Bool {
+        parsedURL != nil
+    }
+
+    public var parsedURL: URLComponents? {
+        guard !normalizedURLString.isEmpty,
+              var components = URLComponents(string: normalizedURLString),
+              let scheme = components.scheme?.lowercased(),
+              Self.supportedSchemes.contains(scheme),
+              let host = components.host,
+              !host.isEmpty,
+              let port = components.port,
+              (1...65_535).contains(port) else {
+            return nil
+        }
+
+        components.scheme = scheme
+        return components
+    }
+
+    /// 保存前统一修剪 URL,不保留 UI 输入里的首尾空白。
+    public var normalized: NetworkProxyConfig {
+        NetworkProxyConfig(urlString: normalizedURLString)
+    }
+
+    public static let supportedSchemes: Set<String> = [
+        "http",
+        "https",
+        "socks",
+        "socks4",
+        "socks4a",
+        "socks5",
+        "socks5h"
+    ]
+}
+
 /// 持久化状态(SQLite)
 public struct PersistedState: Codable, Equatable, Sendable {
     public var pinMode: PinMode
@@ -316,6 +372,8 @@ public struct PersistedState: Codable, Equatable, Sendable {
     public var promptFilterRules: [PromptFilterRule]
     /// 会话打开配置
     public var openSessionConfig: OpenSessionConfig
+    /// 自动更新网络代理配置
+    public var updateProxyConfig: NetworkProxyConfig
 
     public init(
         pinMode: PinMode = .todoOnly,
@@ -323,7 +381,8 @@ public struct PersistedState: Codable, Equatable, Sendable {
         trackingStartedAt: Date = Date(),
         panelAnchor: PanelAnchor? = nil,
         promptFilterRules: [PromptFilterRule] = [],
-        openSessionConfig: OpenSessionConfig = OpenSessionConfig()
+        openSessionConfig: OpenSessionConfig = OpenSessionConfig(),
+        updateProxyConfig: NetworkProxyConfig = NetworkProxyConfig()
     ) {
         self.pinMode = pinMode
         self.completedSessionIDs = completedSessionIDs
@@ -331,5 +390,6 @@ public struct PersistedState: Codable, Equatable, Sendable {
         self.panelAnchor = panelAnchor
         self.promptFilterRules = promptFilterRules
         self.openSessionConfig = openSessionConfig
+        self.updateProxyConfig = updateProxyConfig
     }
 }

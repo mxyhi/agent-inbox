@@ -30,7 +30,14 @@ func stateStorePersistsSettingsAndCompletedSessionsInSQLite() async throws {
                 createdAt: Date(timeIntervalSince1970: 789),
                 updatedAt: Date(timeIntervalSince1970: 999)
             )
-        ]
+        ],
+        openSessionConfig: OpenSessionConfig(
+            method: .custom,
+            customCommand: "codex resume $session_id"
+        ),
+        updateProxyConfig: NetworkProxyConfig(
+            urlString: "socks5://127.0.0.1:7890"
+        )
     )
 
     await store.save(state)
@@ -42,7 +49,22 @@ func stateStorePersistsSettingsAndCompletedSessionsInSQLite() async throws {
     #expect(abs(loaded.trackingStartedAt.timeIntervalSince1970 - 123_456) < 0.001)
     #expect(loaded.panelAnchor == nil) // 未保存过锚点 → nil
     #expect(loaded.promptFilterRules == state.promptFilterRules)
+    #expect(loaded.openSessionConfig == state.openSessionConfig)
+    #expect(loaded.updateProxyConfig == state.updateProxyConfig)
     #expect(FileManager.default.fileExists(atPath: databaseURL.path))
+}
+
+@Test
+func networkProxyConfigValidatesProxyURLs() {
+    #expect(NetworkProxyConfig().isEmpty)
+    #expect(!NetworkProxyConfig().isUsable)
+    #expect(NetworkProxyConfig(urlString: " http://127.0.0.1:7890 ").normalized.urlString == "http://127.0.0.1:7890")
+    #expect(NetworkProxyConfig(urlString: "http://127.0.0.1:7890").isUsable)
+    #expect(NetworkProxyConfig(urlString: "https://proxy.example.com:8080").isUsable)
+    #expect(NetworkProxyConfig(urlString: "socks5://127.0.0.1:7890").isUsable)
+    #expect(!NetworkProxyConfig(urlString: "127.0.0.1:7890").isUsable)
+    #expect(!NetworkProxyConfig(urlString: "http://127.0.0.1").isUsable)
+    #expect(!NetworkProxyConfig(urlString: "ftp://127.0.0.1:21").isUsable)
 }
 
 @Test

@@ -11,6 +11,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable, Hashable {
     case open    // 打开方式
     case data    // 数据来源
     case filter  // firstPrompt 过滤
+    case network // 更新网络
     case about   // 关于
 
     var id: String { rawValue }
@@ -22,6 +23,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable, Hashable {
         case .open: return "打开方式"
         case .data: return "数据"
         case .filter: return "过滤"
+        case .network: return "网络"
         case .about: return "关于"
         }
     }
@@ -33,6 +35,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable, Hashable {
         case .open: return "arrow.up.forward.square"
         case .data: return "externaldrive"
         case .filter: return "line.3.horizontal.decrease.circle"
+        case .network: return "network"
         case .about: return "info.circle"
         }
     }
@@ -83,6 +86,8 @@ struct SettingsView: View {
             DataSettingsSection()
         case .filter:
             FilterSettingsSection(viewModel: viewModel)
+        case .network:
+            NetworkSettingsSection(viewModel: viewModel, updateController: updateController)
         case .about:
             AboutSettingsSection(updateController: updateController)
         }
@@ -406,6 +411,64 @@ private struct FilterSettingsSection: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(NSColor.controlBackgroundColor))
+    }
+}
+
+/// 更新网络代理配置
+private struct NetworkSettingsSection: View {
+    @ObservedObject var viewModel: AppViewModel
+    @ObservedObject var updateController: AppUpdateController
+
+    @State private var proxyURLString: String
+
+    init(viewModel: AppViewModel, updateController: AppUpdateController) {
+        self.viewModel = viewModel
+        self.updateController = updateController
+        let config = viewModel.updateProxyConfig
+        _proxyURLString = State(initialValue: config.urlString)
+    }
+
+    private var validationMessage: String? {
+        let config = NetworkProxyConfig(urlString: proxyURLString)
+        guard !config.isEmpty else { return nil }
+        guard config.isUsable else {
+            return "需填写完整 URL,例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890"
+        }
+        return nil
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent("代理地址") {
+                    TextField("", text: $proxyURLString)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.leading)
+                        .frame(width: 320, alignment: .leading)
+                        .onSubmit { saveIfValid() }
+                        .onChange(of: proxyURLString) { _, _ in saveIfValid() }
+                }
+
+                if let validationMessage {
+                    Text(validationMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            } footer: {
+                Text("留空表示不使用代理。仅影响自动更新检查与下载。")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func saveIfValid() {
+        let config = NetworkProxyConfig(urlString: proxyURLString).normalized
+        guard config.isEmpty || config.isUsable else { return }
+
+        viewModel.setUpdateProxyConfig(config)
+        updateController.applyProxyConfig(config)
     }
 }
 

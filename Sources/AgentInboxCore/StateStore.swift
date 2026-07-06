@@ -28,6 +28,8 @@ public actor StateStore {
             let completedSessionIDs = try readCompletedSessionIDs(database)
             let panelAnchor = try readPanelAnchor(database)
             let promptFilterRules = try readPromptFilterRules(database)
+            let openSessionConfig = try readOpenSessionConfig(database)
+            let updateProxyConfig = try readNetworkProxyConfig(database)
             logger.info("Loaded SQLite state from \(self.databaseURL.path, privacy: .public)")
 
             return PersistedState(
@@ -35,7 +37,9 @@ public actor StateStore {
                 completedSessionIDs: completedSessionIDs,
                 trackingStartedAt: trackingStartedAt,
                 panelAnchor: panelAnchor,
-                promptFilterRules: promptFilterRules
+                promptFilterRules: promptFilterRules,
+                openSessionConfig: openSessionConfig,
+                updateProxyConfig: updateProxyConfig
             )
         } catch {
             logger.error("Failed to load SQLite state, using default: \(String(describing: error), privacy: .public)")
@@ -56,6 +60,8 @@ public actor StateStore {
                 try savePanelAnchor(state.panelAnchor, database)
                 try replaceCompletedSessions(state.completedSessionIDs, database)
                 try replacePromptFilterRules(state.promptFilterRules, database)
+                try saveOpenSessionConfig(state.openSessionConfig, database)
+                try saveNetworkProxyConfig(state.updateProxyConfig, database)
                 try execute(database, "COMMIT")
                 logger.info("Saved SQLite state to \(self.databaseURL.path, privacy: .public)")
             } catch {
@@ -215,6 +221,66 @@ public actor StateStore {
             database,
             "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             bindings: [.text("panel_anchor"), .text("\(anchor.topRightX),\(anchor.topRightY)")]
+        )
+    }
+
+    private func readOpenSessionConfig(_ database: OpaquePointer) throws -> OpenSessionConfig {
+        let methodRaw = try querySingleText(
+            database,
+            sql: "SELECT value FROM settings WHERE key = ?",
+            bindings: [.text("open_session_method")]
+        )
+        let customCommand = try querySingleText(
+            database,
+            sql: "SELECT value FROM settings WHERE key = ?",
+            bindings: [.text("open_session_custom_command")]
+        ) ?? ""
+
+        guard let methodRaw else {
+            return OpenSessionConfig()
+        }
+        guard let method = OpenSessionMethod(rawValue: methodRaw) else {
+            logger.warning("Ignoring malformed open_session_method value: \(methodRaw, privacy: .public)")
+            return OpenSessionConfig(customCommand: customCommand)
+        }
+
+        return OpenSessionConfig(method: method, customCommand: customCommand)
+    }
+
+    private func saveOpenSessionConfig(_ config: OpenSessionConfig, _ database: OpaquePointer) throws {
+        try execute(
+            database,
+            "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            bindings: [.text("open_session_method"), .text(config.method.rawValue)]
+        )
+        try execute(
+            database,
+            "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            bindings: [.text("open_session_custom_command"), .text(config.customCommand)]
+        )
+    }
+
+    private func readNetworkProxyConfig(_ database: OpaquePointer) throws -> NetworkProxyConfig {
+        let urlString = try querySingleText(
+            database,
+            sql: "SELECT value FROM settings WHERE key = ?",
+            bindings: [.text("update_proxy_url")]
+        ) ?? ""
+
+        let config = NetworkProxyConfig(urlString: urlString).normalized
+        if !config.isEmpty && !config.isUsable {
+            logger.warning("Ignoring malformed update_proxy_url value: \(urlString, privacy: .public)")
+            return NetworkProxyConfig()
+        }
+        return config
+    }
+
+    private func saveNetworkProxyConfig(_ config: NetworkProxyConfig, _ database: OpaquePointer) throws {
+        let normalized = config.normalized
+        try execute(
+            database,
+            "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            bindings: [.text("update_proxy_url"), .text(normalized.urlString)]
         )
     }
 

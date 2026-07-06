@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 启动顺序很重要:先加载持久化 → 开监听并完成首扫 → 再创建浮窗(定位/置顶依赖状态)
         Task { @MainActor in
             await viewModel.prepare()
+            updateController.start(proxyConfig: viewModel.updateProxyConfig)
             await viewModel.start()
 
             let controller = FloatingPanelController(viewModel: viewModel)

@@ -13,6 +13,7 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var promptFilterRules: [PromptFilterRule] = []
     @Published var pinMode: PinMode = .todoOnly
     @Published var openSessionConfig: OpenSessionConfig = OpenSessionConfig()
+    @Published var updateProxyConfig: NetworkProxyConfig = NetworkProxyConfig()
 
     private let monitor: CodexSessionMonitor
     private let resolver: CodexStatusResolver
@@ -46,8 +47,9 @@ final class AppViewModel: ObservableObject {
         pinMode = persistedState.pinMode
         promptFilterRules = persistedState.promptFilterRules
         openSessionConfig = persistedState.openSessionConfig
+        updateProxyConfig = persistedState.updateProxyConfig
         logger.info(
-            "持久化状态已加载,pinMode=\(self.pinMode.rawValue, privacy: .public),filterRules=\(self.promptFilterRules.count),openMethod=\(self.openSessionConfig.method.rawValue, privacy: .public)"
+            "持久化状态已加载,pinMode=\(self.pinMode.rawValue, privacy: .public),filterRules=\(self.promptFilterRules.count),openMethod=\(self.openSessionConfig.method.rawValue, privacy: .public),updateProxySet=\(!self.updateProxyConfig.isEmpty, privacy: .public)"
         )
     }
 
@@ -176,6 +178,21 @@ final class AppViewModel: ObservableObject {
         openSessionConfig = config
         persistedState.openSessionConfig = config
         logger.info("会话打开配置变更: method=\(config.method.rawValue, privacy: .public)")
+
+        Task {
+            await stateStore.save(persistedState)
+        }
+    }
+
+    func setUpdateProxyConfig(_ config: NetworkProxyConfig) {
+        let normalized = config.normalized
+        guard updateProxyConfig != normalized else { return }
+
+        updateProxyConfig = normalized
+        persistedState.updateProxyConfig = normalized
+        logger.info(
+            "更新代理配置变更: urlSet=\(!normalized.isEmpty, privacy: .public),usable=\(normalized.isUsable, privacy: .public)"
+        )
 
         Task {
             await stateStore.save(persistedState)
