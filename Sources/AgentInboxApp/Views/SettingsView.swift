@@ -440,14 +440,20 @@ private struct NetworkSettingsSection: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("代理地址") {
+                // 手动对齐这一行,避免 LabeledContent 默认基线让 rounded TextField 视觉偏低。
+                HStack(alignment: .center, spacing: 12) {
+                    Text("代理地址")
+
+                    Spacer(minLength: 12)
+
                     TextField("", text: $proxyURLString)
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.leading)
-                        .frame(width: 320, alignment: .leading)
+                        .frame(width: 320, height: 24, alignment: .leading)
                         .onSubmit { saveIfValid() }
                         .onChange(of: proxyURLString) { _, _ in saveIfValid() }
                 }
+                .frame(minHeight: 28)
 
                 if let validationMessage {
                     Text(validationMessage)
