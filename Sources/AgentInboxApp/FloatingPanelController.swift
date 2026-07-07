@@ -42,7 +42,7 @@ final class FloatingPanelController {
         panel.backgroundColor = .clear // 透明窗口,圆角材质由 SwiftUI 绘制
         panel.isOpaque = false
         panel.hasShadow = true // 系统级阴影
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.collectionBehavior = [.canJoinAllSpaces]
         panel.animationBehavior = .none // 尺寸收放由 SwiftUI 动画驱动,窗口本身不做隐式动画
 
         // SwiftUI 内容:preferredContentSize 让内容理想尺寸驱动窗口大小
@@ -173,12 +173,16 @@ final class FloatingPanelController {
     /// 监听快照/置顶模式变化,动态调整窗口层级
     private func observePinning() {
         viewModel.$snapshot
-            .combineLatest(viewModel.$pinMode)
-            .sink { [weak self] snapshot, pinMode in
+            .combineLatest(viewModel.$pinMode, viewModel.$fullscreenOverlayMode)
+            .sink { [weak self] snapshot, pinMode, fullscreenOverlayMode in
                 guard let self else { return }
                 // @Published 在 willSet 阶段发值,必须使用 publisher 传入的新快照,
                 // 不能回读 viewModel.snapshot,否则最后一个待办清空时会读到旧值。
-                self.syncPinning(snapshot: snapshot, pinMode: pinMode)
+                self.syncPinning(
+                    snapshot: snapshot,
+                    pinMode: pinMode,
+                    fullscreenOverlayMode: fullscreenOverlayMode
+                )
             }
             .store(in: &cancellables)
 
@@ -188,42 +192,56 @@ final class FloatingPanelController {
     /// 按当前配置与快照同步窗口层级。show() 也显式调用一次,避免窗口重新显示时沿用旧 level。
     private func syncPinning(
         snapshot: AgentSnapshot? = nil,
-        pinMode: PinMode? = nil
+        pinMode: PinMode? = nil,
+        fullscreenOverlayMode: FullscreenOverlayMode? = nil
     ) {
         let currentSnapshot = snapshot ?? viewModel.snapshot
         let currentPinMode = pinMode ?? viewModel.pinMode
+        let currentFullscreenOverlayMode = fullscreenOverlayMode ?? viewModel.fullscreenOverlayMode
+        let shouldFloat = currentPinMode.shouldFloat(for: currentSnapshot)
         applyPinning(
-            shouldFloat: currentPinMode.shouldFloat(for: currentSnapshot),
+            shouldFloat: shouldFloat,
+            shouldCoverFullscreen: currentFullscreenOverlayMode.shouldCoverFullscreen(shouldFloat: shouldFloat),
             pinMode: currentPinMode,
+            fullscreenOverlayMode: currentFullscreenOverlayMode,
             todoCount: currentSnapshot.todos.count,
             runningCount: currentSnapshot.running.count
         )
     }
 
-    /// 应用置顶态:`.statusBar` 比 `.floating` 更接近“始终在普通窗口上方”的用户预期。
+    /// 应用置顶态:`.statusBar` 管普通窗口层级,collectionBehavior 单独管全屏 Space 覆盖。
     private func applyPinning(
         shouldFloat: Bool,
+        shouldCoverFullscreen: Bool,
         pinMode: PinMode,
+        fullscreenOverlayMode: FullscreenOverlayMode,
         todoCount: Int,
         runningCount: Int
     ) {
         let nextLevel: NSWindow.Level = shouldFloat ? .statusBar : .normal
-        guard panel.level != nextLevel else {
+        let nextCollectionBehavior: NSWindow.CollectionBehavior = shouldCoverFullscreen
+            ? [.canJoinAllSpaces, .fullScreenAuxiliary]
+            : [.canJoinAllSpaces]
+        let levelChanged = panel.level != nextLevel
+        let collectionBehaviorChanged = panel.collectionBehavior != nextCollectionBehavior
+
+        guard levelChanged || collectionBehaviorChanged else {
             if shouldFloat, panel.isVisible {
                 panel.orderFrontRegardless()
             }
             logger.info(
-                "浮窗置顶状态已同步: mode=\(pinMode.rawValue, privacy: .public) todo=\(todoCount, privacy: .public) running=\(runningCount, privacy: .public) shouldFloat=\(shouldFloat, privacy: .public) level=\(Int(self.panel.level.rawValue), privacy: .public)"
+                "浮窗置顶状态已同步: mode=\(pinMode.rawValue, privacy: .public) fullscreenOverlay=\(fullscreenOverlayMode.rawValue, privacy: .public) todo=\(todoCount, privacy: .public) running=\(runningCount, privacy: .public) shouldFloat=\(shouldFloat, privacy: .public) coverFullscreen=\(shouldCoverFullscreen, privacy: .public) level=\(Int(self.panel.level.rawValue), privacy: .public)"
             )
             return
         }
 
         panel.level = nextLevel
+        panel.collectionBehavior = nextCollectionBehavior
         if shouldFloat, panel.isVisible {
             panel.orderFrontRegardless()
         }
         logger.info(
-            "浮窗置顶状态已应用: mode=\(pinMode.rawValue, privacy: .public) todo=\(todoCount, privacy: .public) running=\(runningCount, privacy: .public) shouldFloat=\(shouldFloat, privacy: .public) level=\(Int(nextLevel.rawValue), privacy: .public)"
+            "浮窗置顶状态已应用: mode=\(pinMode.rawValue, privacy: .public) fullscreenOverlay=\(fullscreenOverlayMode.rawValue, privacy: .public) todo=\(todoCount, privacy: .public) running=\(runningCount, privacy: .public) shouldFloat=\(shouldFloat, privacy: .public) coverFullscreen=\(shouldCoverFullscreen, privacy: .public) level=\(Int(nextLevel.rawValue), privacy: .public)"
         )
     }
 }

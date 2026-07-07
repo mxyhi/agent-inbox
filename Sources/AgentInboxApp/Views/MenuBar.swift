@@ -56,6 +56,15 @@ struct MenuContentView: View {
             }
         }
 
+        Picker("全屏覆盖", selection: Binding(
+            get: { viewModel.fullscreenOverlayMode },
+            set: { viewModel.setFullscreenOverlayMode($0) }
+        )) {
+            ForEach(FullscreenOverlayMode.allCases) { mode in
+                Text(mode.label).tag(mode)
+            }
+        }
+
         Divider()
 
         Button("检查更新…") {

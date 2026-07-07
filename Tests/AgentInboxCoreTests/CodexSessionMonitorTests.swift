@@ -20,7 +20,7 @@ func monitorParsesSessionMetaAndLastTaskComplete() async throws {
     // 模拟真实 rollout:首行 session_meta(id/session_id 并存、cwd、带小数秒 timestamp),
     // 中间夹普通事件,尾部两个 task_complete —— 必须取最后一个
     let body = """
-    {"timestamp":"2026-07-04T14:13:43.646Z","type":"session_meta","payload":{"session_id":"id-should-lose","id":"session-real","timestamp":"2026-07-04T14:13:01.605Z","cwd":"/Users/langhuam/workspace/_all_do","originator":"codex-tui","cli_version":"0.142.5"}}
+    {"timestamp":"2026-07-04T14:13:43.646Z","type":"session_meta","payload":{"session_id":"id-should-lose","id":"session-real","timestamp":"2026-07-04T14:13:01.605Z","cwd":"/Users/example/workspace/_all_do","originator":"codex-tui","cli_version":"0.142.5"}}
     {"timestamp":"2026-07-04T14:14:00.000Z","type":"event_msg","payload":{"type":"agent_message","message":"working"}}
     {"timestamp":"2026-07-04T14:20:00.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","last_agent_message":"第一轮完成"}}
     {"timestamp":"2026-07-04T14:23:29.440Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-2","last_agent_message":"审计完了,基于本机\\n第二行长消息"}}
@@ -38,7 +38,7 @@ func monitorParsesSessionMetaAndLastTaskComplete() async throws {
     #expect(summaries.count == 1)
     let summary = try #require(summaries.first)
     #expect(summary.id == "session-real") // payload.id 优先于 session_id
-    #expect(summary.cwd == "/Users/langhuam/workspace/_all_do")
+    #expect(summary.cwd == "/Users/example/workspace/_all_do")
     // macOS 临时目录存在 /var ↔ /private/var 双写形式,两边统一规范化后再比对
     #expect(
         URL(filePath: summary.filePath).resolvingSymlinksInPath()

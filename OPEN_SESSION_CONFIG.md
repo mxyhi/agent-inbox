@@ -32,8 +32,8 @@ Agent Inbox 支持通过配置自定义如何打开 Codex 会话工作目录。
 | 变量 | 说明 | 示例值 |
 |------|------|--------|
 | `$session_id` | 会话 ID | `rollout-abc123` |
-| `$cwd` | 工作目录路径 | `/Users/dev/workspace/my-project` |
-| `$file_path` | rollout 文件完整路径 | `/Users/dev/.codex/sessions/rollout-abc123.jsonl` |
+| `$cwd` | 工作目录路径 | `/Users/example/workspace/my-project` |
+| `$file_path` | rollout 文件完整路径 | `/Users/example/.codex/sessions/rollout-abc123.jsonl` |
 | `$project_name` | 项目名称（cwd 最后一段） | `my-project` |
 
 ## 示例命令

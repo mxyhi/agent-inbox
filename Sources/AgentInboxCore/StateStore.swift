@@ -24,6 +24,7 @@ public actor StateStore {
             try migrate(database)
 
             let pinMode = try readPinMode(database) ?? .todoOnly
+            let fullscreenOverlayMode = try readFullscreenOverlayMode(database) ?? .whenFloating
             let trackingStartedAt = try ensureTrackingStartedAt(database)
             let completedSessionIDs = try readCompletedSessionIDs(database)
             let panelAnchor = try readPanelAnchor(database)
@@ -34,6 +35,7 @@ public actor StateStore {
 
             return PersistedState(
                 pinMode: pinMode,
+                fullscreenOverlayMode: fullscreenOverlayMode,
                 completedSessionIDs: completedSessionIDs,
                 trackingStartedAt: trackingStartedAt,
                 panelAnchor: panelAnchor,
@@ -56,6 +58,7 @@ public actor StateStore {
             try execute(database, "BEGIN IMMEDIATE TRANSACTION")
             do {
                 try savePinMode(state.pinMode, database)
+                try saveFullscreenOverlayMode(state.fullscreenOverlayMode, database)
                 try saveTrackingStartedAt(state.trackingStartedAt, database)
                 try savePanelAnchor(state.panelAnchor, database)
                 try replaceCompletedSessions(state.completedSessionIDs, database)
@@ -160,6 +163,22 @@ public actor StateStore {
             database,
             "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             bindings: [.text("pin_mode"), .text(pinMode.rawValue)]
+        )
+    }
+
+    private func readFullscreenOverlayMode(_ database: OpaquePointer) throws -> FullscreenOverlayMode? {
+        try querySingleText(
+            database,
+            sql: "SELECT value FROM settings WHERE key = ?",
+            bindings: [.text("fullscreen_overlay_mode")]
+        ).flatMap(FullscreenOverlayMode.init(rawValue:))
+    }
+
+    private func saveFullscreenOverlayMode(_ mode: FullscreenOverlayMode, _ database: OpaquePointer) throws {
+        try execute(
+            database,
+            "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            bindings: [.text("fullscreen_overlay_mode"), .text(mode.rawValue)]
         )
     }
 

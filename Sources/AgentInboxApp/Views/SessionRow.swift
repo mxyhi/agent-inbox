@@ -387,7 +387,7 @@ extension CodexSessionSummary {
         CodexSessionSummary(
             id: "todo-1",
             filePath: "/tmp/rollout-a.jsonl",
-            cwd: "/Users/dev/workspace/agent-inbox",
+            cwd: "/Users/example/workspace/agent-inbox",
             startedAt: Date().addingTimeInterval(-1800),
             modifiedAt: Date().addingTimeInterval(-180),
             taskCompletedAt: Date().addingTimeInterval(-180),
@@ -400,7 +400,7 @@ extension CodexSessionSummary {
         CodexSessionSummary(
             id: "todo-2",
             filePath: "/tmp/rollout-b.jsonl",
-            cwd: "/Users/dev/workspace/_all_do",
+            cwd: "/Users/example/workspace/_all_do",
             startedAt: Date().addingTimeInterval(-7200),
             modifiedAt: Date().addingTimeInterval(-3600),
             taskCompletedAt: Date().addingTimeInterval(-3600),
@@ -413,7 +413,7 @@ extension CodexSessionSummary {
         CodexSessionSummary(
             id: "run-1",
             filePath: "/tmp/rollout-c.jsonl",
-            cwd: "/Users/dev/workspace/side-project",
+            cwd: "/Users/example/workspace/side-project",
             startedAt: Date().addingTimeInterval(-154),
             modifiedAt: Date(),
             taskCompletedAt: nil,

@@ -113,6 +113,16 @@ private struct PanelSettingsSection: View {
                 }
                 .pickerStyle(.radioGroup)
 
+                Picker("全屏覆盖", selection: Binding(
+                    get: { viewModel.fullscreenOverlayMode },
+                    set: { viewModel.setFullscreenOverlayMode($0) }
+                )) {
+                    ForEach(FullscreenOverlayMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+
                 LabeledContent("浮窗位置") {
                     Button("重置到右上角") {
                         // 拖丢了找回来:FloatingPanelController 监听此通知归位并清空持久化
@@ -120,7 +130,7 @@ private struct PanelSettingsSection: View {
                     }
                 }
             } footer: {
-                Text("浮窗可整体拖动,位置会自动记住")
+                Text("全屏覆盖只控制是否进入全屏 App 所在 Space;普通置顶仍由置顶模式决定。浮窗可整体拖动,位置会自动记住")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
