@@ -12,7 +12,6 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var isPanelVisible = false
     @Published private(set) var promptFilterRules: [PromptFilterRule] = []
     @Published var pinMode: PinMode = .todoOnly
-    @Published var fullscreenOverlayMode: FullscreenOverlayMode = .whenFloating
     @Published var openSessionConfig: OpenSessionConfig = OpenSessionConfig()
     @Published var updateProxyConfig: NetworkProxyConfig = NetworkProxyConfig()
 
@@ -46,12 +45,11 @@ final class AppViewModel: ObservableObject {
     func prepare() async {
         persistedState = await stateStore.load()
         pinMode = persistedState.pinMode
-        fullscreenOverlayMode = persistedState.fullscreenOverlayMode
         promptFilterRules = persistedState.promptFilterRules
         openSessionConfig = persistedState.openSessionConfig
         updateProxyConfig = persistedState.updateProxyConfig
         logger.info(
-            "持久化状态已加载,pinMode=\(self.pinMode.rawValue, privacy: .public),fullscreenOverlay=\(self.fullscreenOverlayMode.rawValue, privacy: .public),filterRules=\(self.promptFilterRules.count),openMethod=\(self.openSessionConfig.method.rawValue, privacy: .public),updateProxySet=\(!self.updateProxyConfig.isEmpty, privacy: .public)"
+            "持久化状态已加载,pinMode=\(self.pinMode.rawValue, privacy: .public),filterRules=\(self.promptFilterRules.count),openMethod=\(self.openSessionConfig.method.rawValue, privacy: .public),updateProxySet=\(!self.updateProxyConfig.isEmpty, privacy: .public)"
         )
     }
 
@@ -168,18 +166,6 @@ final class AppViewModel: ObservableObject {
         pinMode = mode
         persistedState.pinMode = mode
         logger.info("置顶模式变更: \(mode.rawValue, privacy: .public)")
-
-        Task {
-            await stateStore.save(persistedState)
-        }
-    }
-
-    func setFullscreenOverlayMode(_ mode: FullscreenOverlayMode) {
-        guard fullscreenOverlayMode != mode else { return }
-
-        fullscreenOverlayMode = mode
-        persistedState.fullscreenOverlayMode = mode
-        logger.info("全屏覆盖模式变更: \(mode.rawValue, privacy: .public)")
 
         Task {
             await stateStore.save(persistedState)

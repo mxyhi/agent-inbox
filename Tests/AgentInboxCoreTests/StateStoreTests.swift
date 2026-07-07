@@ -11,7 +11,6 @@ func stateStorePersistsSettingsAndCompletedSessionsInSQLite() async throws {
     let store = StateStore(databaseURL: databaseURL)
     let state = PersistedState(
         pinMode: .todoOnly,
-        fullscreenOverlayMode: .always,
         completedSessionIDs: ["session-a", "session-b"],
         trackingStartedAt: Date(timeIntervalSince1970: 123_456),
         promptFilterRules: [
@@ -46,7 +45,6 @@ func stateStorePersistsSettingsAndCompletedSessionsInSQLite() async throws {
     let loaded = await store.load()
 
     #expect(loaded.pinMode == .todoOnly)
-    #expect(loaded.fullscreenOverlayMode == .always)
     #expect(loaded.completedSessionIDs == ["session-a", "session-b"])
     #expect(abs(loaded.trackingStartedAt.timeIntervalSince1970 - 123_456) < 0.001)
     #expect(loaded.panelAnchor == nil) // 未保存过锚点 → nil
@@ -54,14 +52,6 @@ func stateStorePersistsSettingsAndCompletedSessionsInSQLite() async throws {
     #expect(loaded.openSessionConfig == state.openSessionConfig)
     #expect(loaded.updateProxyConfig == state.updateProxyConfig)
     #expect(FileManager.default.fileExists(atPath: databaseURL.path))
-}
-
-@Test
-func fullscreenOverlayModeUsesPinningState() {
-    #expect(!FullscreenOverlayMode.never.shouldCoverFullscreen(shouldFloat: true))
-    #expect(!FullscreenOverlayMode.whenFloating.shouldCoverFullscreen(shouldFloat: false))
-    #expect(FullscreenOverlayMode.whenFloating.shouldCoverFullscreen(shouldFloat: true))
-    #expect(FullscreenOverlayMode.always.shouldCoverFullscreen(shouldFloat: false))
 }
 
 @Test
@@ -90,7 +80,6 @@ func stateStoreInitializesTrackingBaselineOnFirstLoad() async throws {
     let second = await store.load()
 
     #expect(first.pinMode == .todoOnly)
-    #expect(first.fullscreenOverlayMode == .whenFloating)
     // 首次 load 就写入 tracking_started_at,后续启动复用同一基线,不把旧 rollout 变成待办
     #expect(first.trackingStartedAt >= before)
     #expect(first.trackingStartedAt <= after)

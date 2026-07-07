@@ -33,39 +33,6 @@ public enum PinMode: String, Codable, CaseIterable, Sendable, Identifiable {
     }
 }
 
-/// 全屏 Space 覆盖策略。置顶层级和是否进入全屏 App 所在 Space 是两件事。
-public enum FullscreenOverlayMode: String, Codable, CaseIterable, Sendable, Identifiable {
-    case never
-    case whenFloating
-    case always
-
-    public var id: String { rawValue }
-
-    /// 设置界面展示文案
-    public var label: String {
-        switch self {
-        case .never:
-            "不覆盖全屏"
-        case .whenFloating:
-            "置顶时覆盖全屏"
-        case .always:
-            "始终覆盖全屏"
-        }
-    }
-
-    /// 当前 pinning 判定下,是否允许浮窗加入全屏 App 所在 Space。
-    public func shouldCoverFullscreen(shouldFloat: Bool) -> Bool {
-        switch self {
-        case .never:
-            false
-        case .whenFloating:
-            shouldFloat
-        case .always:
-            true
-        }
-    }
-}
-
 /// Codex turn 生命周期状态,来自 rollout 尾部最近的 lifecycle event。
 public enum CodexTurnLifecycleState: String, Codable, Equatable, Sendable {
     case running
@@ -396,8 +363,6 @@ public struct NetworkProxyConfig: Codable, Equatable, Sendable {
 /// 持久化状态(SQLite)
 public struct PersistedState: Codable, Equatable, Sendable {
     public var pinMode: PinMode
-    /// 是否允许浮窗覆盖 macOS 全屏 Space。
-    public var fullscreenOverlayMode: FullscreenOverlayMode
     public var completedSessionIDs: Set<String>
     /// 本应用开始跟踪 Codex 的时间;此前已完成的历史 rollout 不进入待办
     public var trackingStartedAt: Date
@@ -412,7 +377,6 @@ public struct PersistedState: Codable, Equatable, Sendable {
 
     public init(
         pinMode: PinMode = .todoOnly,
-        fullscreenOverlayMode: FullscreenOverlayMode = .whenFloating,
         completedSessionIDs: Set<String> = [],
         trackingStartedAt: Date = Date(),
         panelAnchor: PanelAnchor? = nil,
@@ -421,7 +385,6 @@ public struct PersistedState: Codable, Equatable, Sendable {
         updateProxyConfig: NetworkProxyConfig = NetworkProxyConfig()
     ) {
         self.pinMode = pinMode
-        self.fullscreenOverlayMode = fullscreenOverlayMode
         self.completedSessionIDs = completedSessionIDs
         self.trackingStartedAt = trackingStartedAt
         self.panelAnchor = panelAnchor
