@@ -42,7 +42,7 @@ final class FloatingPanelController {
         panel.backgroundColor = .clear // 透明窗口,圆角材质由 SwiftUI 绘制
         panel.isOpaque = false
         panel.hasShadow = true // 系统级阴影
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.collectionBehavior = [.moveToActiveSpace]
         panel.animationBehavior = .none // 尺寸收放由 SwiftUI 动画驱动,窗口本身不做隐式动画
 
         // SwiftUI 内容:preferredContentSize 让内容理想尺寸驱动窗口大小
@@ -185,45 +185,55 @@ final class FloatingPanelController {
         syncPinning()
     }
 
-    /// 按当前配置与快照同步窗口层级。show() 也显式调用一次,避免窗口重新显示时沿用旧 level。
+    /// 按当前配置与快照同步窗口层级及 Space 策略。show() 也显式调用一次,避免沿用旧状态。
     private func syncPinning(
         snapshot: AgentSnapshot? = nil,
         pinMode: PinMode? = nil
     ) {
         let currentSnapshot = snapshot ?? viewModel.snapshot
         let currentPinMode = pinMode ?? viewModel.pinMode
-        applyPinning(
-            shouldFloat: currentPinMode.shouldFloat(for: currentSnapshot),
+        applyPresentation(
+            currentPinMode.panelPresentation(for: currentSnapshot),
             pinMode: currentPinMode,
             todoCount: currentSnapshot.todos.count,
             runningCount: currentSnapshot.running.count
         )
     }
 
-    /// 应用置顶态:`.statusBar` 比 `.floating` 更接近“始终在普通窗口上方”的用户预期。
-    private func applyPinning(
-        shouldFloat: Bool,
+    /// 置顶时跨 Space 覆盖全屏;非置顶时只跟随当前普通 Space。
+    private func applyPresentation(
+        _ presentation: PanelPresentation,
         pinMode: PinMode,
         todoCount: Int,
         runningCount: Int
     ) {
-        let nextLevel: NSWindow.Level = shouldFloat ? .statusBar : .normal
-        guard panel.level != nextLevel else {
-            if shouldFloat, panel.isVisible {
+        let nextLevel: NSWindow.Level = presentation.shouldFloat ? .statusBar : .normal
+        let nextCollectionBehavior: NSWindow.CollectionBehavior = switch presentation {
+        case .normal:
+            [.moveToActiveSpace]
+        case .floatingAcrossFullscreen:
+            [.canJoinAllSpaces, .fullScreenAuxiliary]
+        }
+        let levelChanged = panel.level != nextLevel
+        let collectionBehaviorChanged = panel.collectionBehavior != nextCollectionBehavior
+
+        guard levelChanged || collectionBehaviorChanged else {
+            if presentation.shouldFloat, panel.isVisible {
                 panel.orderFrontRegardless()
             }
             logger.info(
-                "浮窗置顶状态已同步: mode=\(pinMode.rawValue, privacy: .public) todo=\(todoCount, privacy: .public) running=\(runningCount, privacy: .public) shouldFloat=\(shouldFloat, privacy: .public) level=\(Int(self.panel.level.rawValue), privacy: .public)"
+                "浮窗呈现策略已同步: mode=\(pinMode.rawValue, privacy: .public) presentation=\(presentation.rawValue, privacy: .public) todo=\(todoCount, privacy: .public) running=\(runningCount, privacy: .public) level=\(Int(self.panel.level.rawValue), privacy: .public) collectionBehavior=\(Int(self.panel.collectionBehavior.rawValue), privacy: .public)"
             )
             return
         }
 
         panel.level = nextLevel
-        if shouldFloat, panel.isVisible {
+        panel.collectionBehavior = nextCollectionBehavior
+        if presentation.shouldFloat, panel.isVisible {
             panel.orderFrontRegardless()
         }
         logger.info(
-            "浮窗置顶状态已应用: mode=\(pinMode.rawValue, privacy: .public) todo=\(todoCount, privacy: .public) running=\(runningCount, privacy: .public) shouldFloat=\(shouldFloat, privacy: .public) level=\(Int(nextLevel.rawValue), privacy: .public)"
+            "浮窗呈现策略已应用: mode=\(pinMode.rawValue, privacy: .public) presentation=\(presentation.rawValue, privacy: .public) todo=\(todoCount, privacy: .public) running=\(runningCount, privacy: .public) level=\(Int(nextLevel.rawValue), privacy: .public) collectionBehavior=\(Int(nextCollectionBehavior.rawValue), privacy: .public)"
         )
     }
 }

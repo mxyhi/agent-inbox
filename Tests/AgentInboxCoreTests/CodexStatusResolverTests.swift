@@ -81,6 +81,36 @@ func todoOnlyPinModeFloatsOnlyForTodos() {
 }
 
 @Test
+func panelPresentationFollowsConfiguredPinMode() {
+    let now = Date(timeIntervalSince1970: 10_000)
+    let running = makeSummary(id: "running", modifiedAt: now.addingTimeInterval(-5))
+    let todo = makeSummary(
+        id: "todo",
+        modifiedAt: now.addingTimeInterval(-10),
+        taskCompletedAt: now.addingTimeInterval(-10)
+    )
+    let resolver = CodexStatusResolver()
+    let runningSnapshot = resolver.resolve(
+        summaries: [running],
+        completedSessionIDs: [],
+        now: now
+    )
+    let todoSnapshot = resolver.resolve(
+        summaries: [todo],
+        completedSessionIDs: [],
+        now: now
+    )
+
+    #expect(PinMode.alwaysOnTop.panelPresentation(for: .empty) == .floatingAcrossFullscreen)
+    #expect(PinMode.activeOrTodo.panelPresentation(for: .empty) == .normal)
+    #expect(PinMode.activeOrTodo.panelPresentation(for: runningSnapshot) == .floatingAcrossFullscreen)
+    #expect(PinMode.activeOrTodo.panelPresentation(for: todoSnapshot) == .floatingAcrossFullscreen)
+    #expect(PinMode.todoOnly.panelPresentation(for: .empty) == .normal)
+    #expect(PinMode.todoOnly.panelPresentation(for: runningSnapshot) == .normal)
+    #expect(PinMode.todoOnly.panelPresentation(for: todoSnapshot) == .floatingAcrossFullscreen)
+}
+
+@Test
 func runningSessionsAreAllKeptAndSortedByRecency() {
     let now = Date(timeIntervalSince1970: 10_000)
     let older = makeSummary(id: "run-older", modifiedAt: now.addingTimeInterval(-60))

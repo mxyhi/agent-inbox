@@ -1,5 +1,15 @@
 import Foundation
 
+/// 浮窗在普通 Space 与全屏 Space 中的统一呈现策略。
+public enum PanelPresentation: String, Equatable, Sendable {
+    case normal
+    case floatingAcrossFullscreen
+
+    public var shouldFloat: Bool {
+        self == .floatingAcrossFullscreen
+    }
+}
+
 /// 浮窗置顶模式
 public enum PinMode: String, Codable, CaseIterable, Sendable, Identifiable {
     case alwaysOnTop
@@ -30,6 +40,11 @@ public enum PinMode: String, Codable, CaseIterable, Sendable, Identifiable {
         case .todoOnly:
             snapshot.hasTodo
         }
+    }
+
+    /// 同一个置顶判定必须同时控制窗口层级与全屏 Space 参与。
+    public func panelPresentation(for snapshot: AgentSnapshot) -> PanelPresentation {
+        shouldFloat(for: snapshot) ? .floatingAcrossFullscreen : .normal
     }
 }
 

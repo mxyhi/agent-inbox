@@ -127,6 +127,16 @@ public actor StateStore {
         // 移除历史遗留的 name 列:规则由 pattern 直接标识,name 冗余。
         // 旧库有该列时 DROP;新库无此列,ALTER 失败可安全忽略。
         try? executeRaw(database, "ALTER TABLE filter_rules DROP COLUMN name")
+
+        // 全屏参与已统一由 pin_mode 决定,直接清理被移除开关的废弃配置。
+        try executeRaw(
+            database,
+            "DELETE FROM settings WHERE key IN ('fullscreen_overlay_mode', 'covers_fullscreen_when_floating')"
+        )
+        let removedFullscreenSettings = sqlite3_changes(database)
+        if removedFullscreenSettings > 0 {
+            logger.info("Removed \(removedFullscreenSettings) obsolete fullscreen settings")
+        }
     }
 
     private func readPinMode(_ database: OpaquePointer) throws -> PinMode? {
