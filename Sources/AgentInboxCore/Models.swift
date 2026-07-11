@@ -1,5 +1,11 @@
 import Foundation
 
+/// AppKit 窗口排序动作,与置顶策略一起计算,避免调用方再次强制置前。
+public enum PanelWindowOrdering: String, Equatable, Sendable {
+    case front
+    case frontRegardless
+}
+
 /// 浮窗在普通 Space 与全屏 Space 中的统一呈现策略。
 public enum PanelPresentation: String, Equatable, Sendable {
     case normal
@@ -7,6 +13,20 @@ public enum PanelPresentation: String, Equatable, Sendable {
 
     public var shouldFloat: Bool {
         self == .floatingAcrossFullscreen
+    }
+
+    public var windowOrdering: PanelWindowOrdering {
+        switch self {
+        case .normal:
+            .front
+        case .floatingAcrossFullscreen:
+            .frontRegardless
+        }
+    }
+
+    /// 普通态不覆盖占满屏幕的前台应用;置顶态保持跨全屏可见。
+    public func shouldSuppress(whenFrontmostWindowCoversScreen: Bool) -> Bool {
+        self == .normal && whenFrontmostWindowCoversScreen
     }
 }
 

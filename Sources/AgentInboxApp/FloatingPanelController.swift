@@ -19,12 +19,15 @@ final class FloatingPanelController {
     private let panel: NSPanel
     private let viewModel: AppViewModel
     private var cancellables: Set<AnyCancellable> = []
+    private var spaceReevaluationTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "agent-inbox", category: "FloatingPanel")
 
     /// 当前窗口右上角锚点(屏幕坐标)
     private var anchor: NSPoint = .zero
     /// 程序化移动期间抑制 didMove 的锚点回写
     private var isProgrammaticMove = false
+    /// 区分用户隐藏与其他应用占满屏幕时的临时抑制,保证离开全屏后自动恢复。
+    private var isSuppressedForCoveredScreen = false
 
     init(viewModel: AppViewModel) {
         self.viewModel = viewModel
@@ -69,22 +72,24 @@ final class FloatingPanelController {
 
     /// 显示浮窗(不抢占焦点)
     func show() {
-        syncPinning()
-        panel.orderFrontRegardless()
         viewModel.setPanelVisible(true)
-        logger.info("浮窗已显示")
+        let presentation = syncPinning()
+        logger.info(
+            "浮窗显示请求已同步: ordering=\(presentation.windowOrdering.rawValue, privacy: .public) suppressed=\(self.isSuppressedForCoveredScreen, privacy: .public)"
+        )
     }
 
     /// 隐藏浮窗并同步菜单栏可见状态。
     private func hide() {
-        panel.orderOut(nil)
         viewModel.setPanelVisible(false)
+        panel.orderOut(nil)
+        isSuppressedForCoveredScreen = false
         logger.info("浮窗已隐藏")
     }
 
     /// 切换显示/隐藏
     func toggleVisibility() {
-        if panel.isVisible {
+        if viewModel.isPanelVisible {
             hide()
         } else {
             show()
@@ -168,6 +173,21 @@ final class FloatingPanelController {
                 self.logger.info("窗口位置已重置为默认右上角")
             }
             .store(in: &cancellables)
+
+        // 原生全屏切换会改变 active Space;应用切换时也要立即重算临时抑制。
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        workspaceCenter.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
+        .sink { [weak self] _ in
+            self?.syncPinning()
+            self?.scheduleSpaceReevaluation()
+        }
+        .store(in: &cancellables)
+
+        workspaceCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)
+        .sink { [weak self] _ in
+            self?.syncPinning()
+        }
+        .store(in: &cancellables)
     }
 
     /// 监听快照/置顶模式变化,动态调整窗口层级
@@ -186,21 +206,24 @@ final class FloatingPanelController {
     }
 
     /// 按当前配置与快照同步窗口层级及 Space 策略。show() 也显式调用一次,避免沿用旧状态。
+    @discardableResult
     private func syncPinning(
         snapshot: AgentSnapshot? = nil,
         pinMode: PinMode? = nil
-    ) {
+    ) -> PanelPresentation {
         let currentSnapshot = snapshot ?? viewModel.snapshot
         let currentPinMode = pinMode ?? viewModel.pinMode
+        let presentation = currentPinMode.panelPresentation(for: currentSnapshot)
         applyPresentation(
-            currentPinMode.panelPresentation(for: currentSnapshot),
+            presentation,
             pinMode: currentPinMode,
             todoCount: currentSnapshot.todos.count,
             runningCount: currentSnapshot.running.count
         )
+        return presentation
     }
 
-    /// 置顶时跨 Space 覆盖全屏;非置顶时只跟随当前普通 Space。
+    /// 置顶时跨 Space 覆盖全屏;非置顶时只跟随当前 Space。
     private func applyPresentation(
         _ presentation: PanelPresentation,
         pinMode: PinMode,
@@ -218,22 +241,86 @@ final class FloatingPanelController {
         let collectionBehaviorChanged = panel.collectionBehavior != nextCollectionBehavior
 
         guard levelChanged || collectionBehaviorChanged else {
-            if presentation.shouldFloat, panel.isVisible {
-                panel.orderFrontRegardless()
-            }
+            reconcilePanelVisibility(presentation)
             logger.info(
-                "浮窗呈现策略已同步: mode=\(pinMode.rawValue, privacy: .public) presentation=\(presentation.rawValue, privacy: .public) todo=\(todoCount, privacy: .public) running=\(runningCount, privacy: .public) level=\(Int(self.panel.level.rawValue), privacy: .public) collectionBehavior=\(Int(self.panel.collectionBehavior.rawValue), privacy: .public)"
+                "浮窗呈现策略已同步: mode=\(pinMode.rawValue, privacy: .public) presentation=\(presentation.rawValue, privacy: .public) ordering=\(presentation.windowOrdering.rawValue, privacy: .public) todo=\(todoCount, privacy: .public) running=\(runningCount, privacy: .public) level=\(Int(self.panel.level.rawValue), privacy: .public) collectionBehavior=\(Int(self.panel.collectionBehavior.rawValue), privacy: .public)"
             )
             return
         }
 
         panel.level = nextLevel
         panel.collectionBehavior = nextCollectionBehavior
-        if presentation.shouldFloat, panel.isVisible {
+        reconcilePanelVisibility(presentation)
+        logger.info(
+            "浮窗呈现策略已应用: mode=\(pinMode.rawValue, privacy: .public) presentation=\(presentation.rawValue, privacy: .public) ordering=\(presentation.windowOrdering.rawValue, privacy: .public) todo=\(todoCount, privacy: .public) running=\(runningCount, privacy: .public) level=\(Int(nextLevel.rawValue), privacy: .public) collectionBehavior=\(Int(nextCollectionBehavior.rawValue), privacy: .public)"
+        )
+    }
+
+    /// 普通态只按 AppKit 标准顺序显示;只有置顶策略可以绕过前台应用强制置前。
+    private func orderPanel(_ ordering: PanelWindowOrdering) {
+        switch ordering {
+        case .front:
+            panel.orderFront(nil)
+        case .frontRegardless:
             panel.orderFrontRegardless()
         }
-        logger.info(
-            "浮窗呈现策略已应用: mode=\(pinMode.rawValue, privacy: .public) presentation=\(presentation.rawValue, privacy: .public) todo=\(todoCount, privacy: .public) running=\(runningCount, privacy: .public) level=\(Int(nextLevel.rawValue), privacy: .public) collectionBehavior=\(Int(nextCollectionBehavior.rawValue), privacy: .public)"
+    }
+
+    /// 应用置顶策略与前台窗口覆盖状态,不会把临时抑制写成用户隐藏。
+    private func reconcilePanelVisibility(_ presentation: PanelPresentation) {
+        let frontmostWindowCoversScreen = activeFrontmostWindowCoversScreen()
+        let shouldSuppress = presentation.shouldSuppress(
+            whenFrontmostWindowCoversScreen: frontmostWindowCoversScreen
         )
+
+        if shouldSuppress {
+            panel.orderOut(nil)
+        } else if viewModel.isPanelVisible {
+            orderPanel(presentation.windowOrdering)
+        }
+
+        guard shouldSuppress != isSuppressedForCoveredScreen else { return }
+        isSuppressedForCoveredScreen = shouldSuppress
+        logger.info(
+            "浮窗全屏抑制已变更: suppressed=\(shouldSuppress, privacy: .public) presentation=\(presentation.rawValue, privacy: .public) frontmostCoversScreen=\(frontmostWindowCoversScreen, privacy: .public)"
+        )
+    }
+
+    /// 无需辅助功能权限:只用前台进程、窗口层级和公开 bounds 判断窗口是否占满某块屏幕。
+    private func activeFrontmostWindowCoversScreen() -> Bool {
+        guard let frontmostApplication = NSWorkspace.shared.frontmostApplication,
+              frontmostApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+            return false
+        }
+
+        let screenSizes = NSScreen.screens.map { $0.frame.size }
+        let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID)
+            as? [[String: Any]] ?? []
+
+        return windows.contains { window in
+            guard (window[kCGWindowOwnerPID as String] as? pid_t)
+                    == frontmostApplication.processIdentifier,
+                  (window[kCGWindowLayer as String] as? Int) == 0,
+                  let bounds = window[kCGWindowBounds as String] as? [String: NSNumber],
+                  let width = bounds["Width"]?.doubleValue,
+                  let height = bounds["Height"]?.doubleValue else {
+                return false
+            }
+
+            return screenSizes.contains { screenSize in
+                // 原生全屏窗口可能为系统菜单栏保留少量高度;90% 阈值也覆盖系统缩放最大化窗口。
+                width >= screenSize.width * 0.9 && height >= screenSize.height * 0.9
+            }
+        }
+    }
+
+    /// Space 通知早于全屏动画结束;延迟复核最终窗口尺寸,避免进入/退出状态卡在过渡值。
+    private func scheduleSpaceReevaluation() {
+        spaceReevaluationTask?.cancel()
+        spaceReevaluationTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled else { return }
+            self?.syncPinning()
+        }
     }
 }

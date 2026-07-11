@@ -111,6 +111,19 @@ func panelPresentationFollowsConfiguredPinMode() {
 }
 
 @Test
+func panelPresentationControlsWindowOrdering() {
+    #expect(PanelPresentation.normal.windowOrdering == .front)
+    #expect(PanelPresentation.floatingAcrossFullscreen.windowOrdering == .frontRegardless)
+}
+
+@Test
+func panelPresentationSuppressesOnlyNormalWindowsBehindFullscreenApps() {
+    #expect(PanelPresentation.normal.shouldSuppress(whenFrontmostWindowCoversScreen: true))
+    #expect(!PanelPresentation.normal.shouldSuppress(whenFrontmostWindowCoversScreen: false))
+    #expect(!PanelPresentation.floatingAcrossFullscreen.shouldSuppress(whenFrontmostWindowCoversScreen: true))
+}
+
+@Test
 func runningSessionsAreAllKeptAndSortedByRecency() {
     let now = Date(timeIntervalSince1970: 10_000)
     let older = makeSummary(id: "run-older", modifiedAt: now.addingTimeInterval(-60))
