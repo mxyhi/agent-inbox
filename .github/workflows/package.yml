@@ -30,15 +30,15 @@ permissions:
 jobs:
   package:
     name: Build macOS app artifact
-    runs-on: macos-latest
+    runs-on: macos-26
     env:
       HAS_SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY != '' && 'true' || 'false' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.0
 
       - name: Cache SwiftPM
-        uses: actions/cache@v4
+        uses: actions/cache@v6.1.0
         with:
           path: |
             .build
@@ -46,6 +46,11 @@ jobs:
           key: swiftpm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}-${{ hashFiles('Package.swift') }}
           restore-keys: |
             swiftpm-${{ runner.os }}-
+
+      - name: Log toolchain
+        run: |
+          xcodebuild -version
+          swift --version
 
       - name: Resolve release metadata
         id: release
@@ -126,7 +131,7 @@ jobs:
           fi
 
       - name: Upload app artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: agent-inbox-macos-${{ inputs.version }}
           path: |

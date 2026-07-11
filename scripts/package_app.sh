@@ -33,7 +33,13 @@ if [[ ! "${BUILD_NUMBER}" =~ ^[0-9]+([.][0-9]+)*$ ]]; then
     exit 1
 fi
 
-swift_build_args=(-c release --product "${PRODUCT_NAME}")
+swift_build_args=(
+    -c release
+    --product "${PRODUCT_NAME}"
+    -Xswiftc -strict-concurrency=complete
+    -Xswiftc -warn-concurrency
+    -Xswiftc -warnings-as-errors
+)
 for arch in ${ARCHS}; do
     swift_build_args+=(--arch "${arch}")
 done

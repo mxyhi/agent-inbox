@@ -19,6 +19,7 @@ final class AppViewModel: ObservableObject {
     private let resolver: CodexStatusResolver
     private let stateStore: StateStore
     private let executor: OpenSessionExecutor
+    private let notificationController: UserNotificationController
     private let logger = Logger(subsystem: "agent-inbox", category: "AppViewModel")
     private var persistedState = PersistedState()
     private var reconcileTask: Task<Void, Never>?
@@ -31,12 +32,14 @@ final class AppViewModel: ObservableObject {
         monitor: CodexSessionMonitor = CodexSessionMonitor(),
         resolver: CodexStatusResolver = CodexStatusResolver(),
         stateStore: StateStore = StateStore(),
-        executor: OpenSessionExecutor = OpenSessionExecutor()
+        executor: OpenSessionExecutor = OpenSessionExecutor(),
+        notificationController: UserNotificationController = UserNotificationController()
     ) {
         self.monitor = monitor
         self.resolver = resolver
         self.stateStore = stateStore
         self.executor = executor
+        self.notificationController = notificationController
     }
 
     // MARK: - 生命周期
@@ -121,7 +124,7 @@ final class AppViewModel: ObservableObject {
         guard let session = snapshot.todos.first(where: { $0.id == id })
             ?? snapshot.running.first(where: { $0.id == id }) else {
             logger.warning("openSession 未找到会话: \(id, privacy: .public)")
-            showNotification(title: "打开失败", message: "未找到会话 \(id)")
+            notificationController.show(title: "打开失败", message: "未找到会话 \(id)")
             return
         }
 
@@ -130,7 +133,7 @@ final class AppViewModel: ObservableObject {
             logger.info("成功打开会话: \(id, privacy: .public), method=\(self.openSessionConfig.method.rawValue, privacy: .public)")
         } catch {
             logger.error("打开会话失败: \(String(describing: error), privacy: .public)")
-            showNotification(title: "打开会话失败", message: error.localizedDescription)
+            notificationController.show(title: "打开会话失败", message: error.localizedDescription)
         }
     }
 
@@ -354,15 +357,6 @@ final class AppViewModel: ObservableObject {
     }
 
     // MARK: - 内部
-
-    /// 显示系统通知
-    private func showNotification(title: String, message: String) {
-        let notification = NSUserNotification()
-        notification.title = title
-        notification.informativeText = message
-        notification.soundName = NSUserNotificationDefaultSoundName
-        NSUserNotificationCenter.default.deliver(notification)
-    }
 
     /// 扫描 → 解析 → 发布(仅在快照变化时触发 UI 更新)
     private func refresh() async {

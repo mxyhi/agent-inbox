@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.3
 
 import PackageDescription
 
@@ -32,5 +32,6 @@ let package = Package(
             name: "AgentInboxCoreTests",
             dependencies: ["AgentInboxCore"]
         )
-    ]
+    ],
+    swiftLanguageModes: [.v6]
 )
