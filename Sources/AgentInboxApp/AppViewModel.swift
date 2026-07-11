@@ -391,9 +391,29 @@ final class AppViewModel: ObservableObject {
         )
 
         if next != snapshot {
+            let newTodos = next.newTodos(comparedTo: snapshot)
             logger.info("快照变化: 待办 \(next.todos.count) · 运行 \(next.running.count)")
             snapshot = next
+            notifyNewTodos(newTodos)
         }
+    }
+
+    /// 同一轮多个完成事件合并为一条系统通知，避免连续播放多次声音。
+    private func notifyNewTodos(_ todos: [CodexSessionSummary]) {
+        guard !todos.isEmpty else { return }
+
+        let title = todos.count == 1 ? "有新待办" : "有 \(todos.count) 个新待办"
+        let message = if let todo = todos.first, todos.count == 1 {
+            "\(todo.projectName) 的 Agent 会话已完成，等待处理"
+        } else {
+            "\(todos.count) 个 Agent 会话已完成，等待处理"
+        }
+        notificationController.show(
+            title: title,
+            message: message,
+            threadIdentifier: "agent-inbox-todos"
+        )
+        logger.info("新待办通知已请求: count=\(todos.count)")
     }
 
     private func filterCurrentSnapshot() {

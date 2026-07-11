@@ -28,7 +28,11 @@ final class UserNotificationController: NSObject {
     }
 
     /// 异步检查授权并立即投递通知；调用方无需阻塞用户操作。
-    func show(title: String, message: String) {
+    func show(
+        title: String,
+        message: String,
+        threadIdentifier: String = "agent-inbox-errors"
+    ) {
         guard let center else {
             showFallbackAlert(title: title, message: message)
             return
@@ -45,7 +49,7 @@ final class UserNotificationController: NSObject {
                 content.title = title
                 content.body = message
                 content.sound = .default
-                content.threadIdentifier = "agent-inbox-errors"
+                content.threadIdentifier = threadIdentifier
                 content.interruptionLevel = .active
 
                 let identifier = UUID().uuidString

@@ -255,6 +255,13 @@ public struct AgentSnapshot: Equatable, Sendable {
     public var isEmpty: Bool { todos.isEmpty && running.isEmpty }
     public var hasTodo: Bool { !todos.isEmpty }
     public var isActive: Bool { !running.isEmpty }
+
+    /// 只把已观察为运行中、随后进入待办的同一会话视为新待办。
+    /// 直接从空快照发现的历史待办不会触发启动通知。
+    public func newTodos(comparedTo previous: AgentSnapshot) -> [CodexSessionSummary] {
+        let previouslyRunningIDs = Set(previous.running.map(\.id))
+        return todos.filter { previouslyRunningIDs.contains($0.id) }
+    }
 }
 
 /// 浮窗右上角锚点(AppKit 屏幕坐标),用于跨启动恢复窗口位置
