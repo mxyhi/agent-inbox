@@ -156,11 +156,20 @@ public actor StateStore {
         defer { sqlite3_finalize(statement) }
 
         var ids: Set<String> = []
+        var normalizedCount = 0
         while sqlite3_step(statement) == SQLITE_ROW {
             guard let cString = sqlite3_column_text(statement, 0) else {
                 continue
             }
-            ids.insert(String(cString: cString))
+            let raw = String(cString: cString)
+            let normalized = SessionIdentity.normalizeCompletedID(raw)
+            if normalized != raw {
+                normalizedCount += 1
+            }
+            ids.insert(normalized)
+        }
+        if normalizedCount > 0 {
+            logger.info("Normalized \(normalizedCount) legacy completed session ids to codex: prefix")
         }
         return ids
     }
@@ -297,11 +306,13 @@ public actor StateStore {
     private func replaceCompletedSessions(_ ids: Set<String>, _ database: OpaquePointer) throws {
         try execute(database, "DELETE FROM completed_sessions")
 
+        // 写出前再归一一次,保证库内一律是 provider:sessionID
         for id in ids {
+            let normalized = SessionIdentity.normalizeCompletedID(id)
             try execute(
                 database,
                 "INSERT INTO completed_sessions(session_id, completed_at) VALUES (?, ?)",
-                bindings: [.text(id), .double(Date().timeIntervalSince1970)]
+                bindings: [.text(normalized), .double(Date().timeIntervalSince1970)]
             )
         }
     }

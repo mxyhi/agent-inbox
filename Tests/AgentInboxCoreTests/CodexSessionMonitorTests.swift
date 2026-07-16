@@ -37,7 +37,9 @@ func monitorParsesSessionMetaAndLastTaskComplete() async throws {
 
     #expect(summaries.count == 1)
     let summary = try #require(summaries.first)
-    #expect(summary.id == "session-real") // payload.id 优先于 session_id
+    #expect(summary.sessionID == "session-real") // payload.id 优先于 session_id
+    #expect(summary.provider == .codex)
+    #expect(summary.id == "codex:session-real")
     #expect(summary.cwd == "/Users/example/workspace/_all_do")
     // macOS 临时目录存在 /var ↔ /private/var 双写形式,两边统一规范化后再比对
     #expect(
@@ -154,7 +156,7 @@ func monitorLeavesCompletionNilWhenNoTaskComplete() async throws {
     )
 
     let summary = try #require(await CodexSessionMonitor(sessionsRoot: root).scan().first)
-    #expect(summary.id == "session-live")
+    #expect(summary.sessionID == "session-live")
     #expect(summary.taskCompletedAt == nil)
     #expect(summary.lastAgentMessage == nil)
     #expect(!summary.isTaskComplete)
@@ -203,7 +205,7 @@ func monitorFallsBackToFileNameWhenHeadIsNotSessionMeta() async throws {
     )
 
     let summary = try #require(await CodexSessionMonitor(sessionsRoot: root).scan().first)
-    #expect(summary.id == "rollout-2026-07-04T16-00-00-legacy")
+    #expect(summary.sessionID == "rollout-2026-07-04T16-00-00-legacy")
     #expect(summary.cwd == nil)
     #expect(summary.startedAt == nil)
     #expect(summary.taskCompletedAt != nil)
@@ -282,8 +284,8 @@ func monitorIncrementallyParsesChangedRolloutOnly() async throws {
     )
 
     let changed = await monitor.scanChangedPaths([firstFile.path])
-    let first = try #require(changed.first { $0.id == "session-first" })
-    let second = try #require(changed.first { $0.id == "session-second" })
+    let first = try #require(changed.first { $0.sessionID == "session-first" })
+    let second = try #require(changed.first { $0.sessionID == "session-second" })
     #expect(first.lastAgentMessage == "first-v2")
     #expect(second.lastAgentMessage == "second-v1")
 }

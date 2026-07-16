@@ -55,26 +55,34 @@
 
 ```
 AgentInboxCore
-├── Models.swift              # 契约:CodexSessionSummary(+cwd/startedAt)、AgentSnapshot、PanelAnchor
-├── CodexSessionMonitor.swift # actor:后台扫描 + mtime 缓存(未变更文件零重解析)
-│                             #   head 8KB → session_meta(id/cwd/startedAt)
-│                             #   tail 256KB → task_complete(完成时间/最后消息)
-├── CodexStatusResolver.swift # 纯函数:summaries → AgentSnapshot(排序/过滤)
-└── StateStore.swift          # SQLite:pin_mode / completed_sessions / panel_anchor
+├── Models.swift                 # AgentProvider、SessionSummary、AgentSnapshot、SessionIdentity
+├── CodexSessionMonitor.swift    # actor:扫 ~/.codex/sessions rollout jsonl + mtime 缓存
+├── GrokSessionMonitor.swift     # actor:扫 ~/.grok/sessions + active_sessions/pid + events tail
+├── CompositeSessionMonitor.swift# 并行合并 Codex+Grok
+├── CodexStatusResolver.swift    # AgentStatusResolver:summaries → AgentSnapshot
+├── OpenSessionExecutor.swift    # 打开 cwd / 自定义命令($session_id/$provider/…)
+└── StateStore.swift             # SQLite;completed 存 provider:sessionID
 
 AgentInboxApp
-├── AgentInboxApp.swift            # 入口:prepare(载锚点) → 建浮窗 → start(轮询)
-├── AppViewModel.swift        # snapshot 发布 + 乐观更新(完成即时剔除)
-├── FloatingPanelController.swift # 尺寸自适应 + 右上锚定 + 位置持久化(防抖 400ms)
-├── DesignSystem.swift        # DS:色彩/字体/间距/动画(单文件)
+├── AgentInboxApp.swift
+├── AppViewModel.swift           # Composite 扫描 + 快照发布 + 完成乐观更新
+├── SessionsWatcher.swift        # 多 root FSEvents(Codex+Grok+active_sessions 父目录)
+├── FloatingPanelController.swift
+├── DesignSystem.swift
 └── Views/
-    ├── PanelRoot.swift       # 胶囊⇄列表分发 + 材质 + 描边 + 右键菜单
-    ├── SessionRow.swift      # TodoRow / RunningRow / CompleteButton
-    ├── StatusOrb.swift       # 呼吸/涟漪光点(phaseAnimator/keyframeAnimator)
-    ├── TimeText.swift        # 相对时间(60s)/ 运行时长(1s,等宽数字)
+    ├── PanelRoot.swift
+    ├── SessionRow.swift         # 混排 + ProviderTag(Codex/Grok)
+    ├── StatusOrb.swift
+    ├── TimeText.swift
     ├── VisualEffectBackground.swift
-    └── MenuBar.swift         # 菜单栏 + 设置
+    └── MenuBar.swift
 ```
+
+## 多源会话(P0,2026-07-15)
+
+- 统一模型:`SessionSummary { provider, sessionID, … }`,`id = provider:sessionID`。
+- Grok 待办语义:进程退出且曾 `turn_ended(completed)` 才进待办;进程存活等输入不展示。
+- 设计细则见 `docs/design-grok-support.md`。
 
 ## 顺手修掉的 bug
 

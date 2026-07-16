@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import OSLog
 
-/// 会话打开执行引擎 —— 根据配置以不同方式打开 Codex 会话
+/// 会话打开执行引擎 —— 根据配置以不同方式打开会话工作目录
 /// 支持 Finder/Terminal/VS Code 预设方式,以及自定义 shell 命令模板
 public final class OpenSessionExecutor {
     private let logger = Logger(subsystem: "agent-inbox", category: "OpenSessionExecutor")
@@ -11,14 +11,16 @@ public final class OpenSessionExecutor {
 
     /// 执行会话打开操作
     /// - Parameters:
-    ///   - session: 会话摘要（包含 id/cwd/filePath/projectName）
+    ///   - session: 会话摘要（包含 sessionID/cwd/filePath/projectName）
     ///   - config: 打开配置（方式 + 自定义命令模板）
     /// - Throws: 执行失败时抛出错误
     public func execute(
-        session: CodexSessionSummary,
+        session: SessionSummary,
         config: OpenSessionConfig
     ) throws {
-        logger.info("执行会话打开: method=\(config.method.rawValue, privacy: .public), session=\(session.id, privacy: .public)")
+        logger.info(
+            "执行会话打开: method=\(config.method.rawValue, privacy: .public), provider=\(session.provider.rawValue, privacy: .public), session=\(session.sessionID, privacy: .public)"
+        )
 
         switch config.method {
         case .finder:
@@ -35,21 +37,21 @@ public final class OpenSessionExecutor {
     // MARK: - 预设方式实现
 
     /// Finder 打开目录（默认方式）
-    /// cwd 存在时打开目录，缺失时在 Finder 中定位 rollout 文件
-    private func executeFinder(session: CodexSessionSummary) {
+    /// cwd 存在时打开目录，缺失时在 Finder 中定位会话文件/目录
+    private func executeFinder(session: SessionSummary) {
         if let cwd = session.cwd, !cwd.isEmpty {
             NSWorkspace.shared.open(URL(filePath: cwd))
             logger.info("Finder 打开目录: \(cwd, privacy: .public)")
         } else {
-            // cwd 缺失：在 Finder 中高亮 rollout 文件
+            // cwd 缺失：在 Finder 中高亮会话路径
             NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: session.filePath)])
-            logger.info("cwd 缺失，Finder 定位 rollout 文件: \(session.filePath, privacy: .public)")
+            logger.info("cwd 缺失，Finder 定位会话路径: \(session.filePath, privacy: .public)")
         }
     }
 
     /// Terminal 打开目录
     /// 使用 `open -a Terminal` 命令在终端中打开工作目录
-    private func executeTerminal(session: CodexSessionSummary) throws {
+    private func executeTerminal(session: SessionSummary) throws {
         guard let cwd = session.cwd, !cwd.isEmpty else {
             logger.warning("Terminal 打开失败: cwd 缺失，fallback 到 Finder")
             executeFinder(session: session)
@@ -63,7 +65,7 @@ public final class OpenSessionExecutor {
 
     /// VS Code 打开目录
     /// 使用 `code` 命令打开工作目录（需用户已安装 VS Code 并配置 code 命令）
-    private func executeVSCode(session: CodexSessionSummary) throws {
+    private func executeVSCode(session: SessionSummary) throws {
         guard let cwd = session.cwd, !cwd.isEmpty else {
             logger.warning("VS Code 打开失败: cwd 缺失，fallback 到 Finder")
             executeFinder(session: session)
@@ -77,18 +79,20 @@ public final class OpenSessionExecutor {
 
     /// 执行自定义命令模板
     /// 支持变量替换: $session_id, $cwd, $file_path, $project_name
-    private func executeCustom(session: CodexSessionSummary, template: String) throws {
+    private func executeCustom(session: SessionSummary, template: String) throws {
         let trimmed = template.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw OpenSessionError.emptyCustomCommand
         }
 
         // 变量替换（按最长匹配优先，避免 $session_id 被 $session 部分替换）
+        // $session_id 使用源原生 id,便于 `grok --resume` 等命令直接消费
         var command = trimmed
-        command = command.replacingOccurrences(of: "$session_id", with: session.id)
+        command = command.replacingOccurrences(of: "$session_id", with: session.sessionID)
         command = command.replacingOccurrences(of: "$cwd", with: session.cwd ?? "")
         command = command.replacingOccurrences(of: "$file_path", with: session.filePath)
         command = command.replacingOccurrences(of: "$project_name", with: session.projectName)
+        command = command.replacingOccurrences(of: "$provider", with: session.provider.rawValue)
 
         logger.info("执行自定义命令: \(command, privacy: .public)")
         try executeShellCommand(command)

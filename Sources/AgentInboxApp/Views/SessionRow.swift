@@ -8,7 +8,7 @@ import SwiftUI
 /// 用橙色语义底 + 描边把它从素行里抬起来,内含「问」(首个用户提示词)/「答」(Codex 最后交付)
 /// 双段上下文,以及一排行动:打开会话 + 长按完成。其余待办保持单行素行,一张富卡压一列素行即焦点。
 struct FocusTodoCard: View {
-    let session: CodexSessionSummary
+    let session: SessionSummary
     /// 「打开↗」—— 跳到会话工作目录
     let onOpen: () -> Void
     /// 长按完成 —— 从快照剔除该待办
@@ -18,7 +18,7 @@ struct FocusTodoCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Metrics.segmentTagSpacing) {
-            // 顶行:涟漪橙点 + 项目名 + 完成时间
+            // 顶行:涟漪橙点 + 项目名 + 源标签 + 完成时间
             HStack(spacing: DS.Metrics.rowSpacing) {
                 StatusOrb(kind: .todo)
 
@@ -26,6 +26,8 @@ struct FocusTodoCard: View {
                     .font(DS.Fonts.focusTitle)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
+
+                ProviderTag(provider: session.provider)
 
                 Spacer(minLength: 12)
 
@@ -143,7 +145,7 @@ private struct SegmentLine: View {
 /// 待办行 —— 涟漪橙点 + 项目名 + 相对时间 + 长按完成。
 /// V4.1:摘要归焦点卡独占,其余待办一律单行紧凑,强化「单一焦点」。
 struct TodoRow: View {
-    let session: CodexSessionSummary
+    let session: SessionSummary
     let onComplete: () -> Void
     let onCreateFilter: () -> Void
 
@@ -157,6 +159,8 @@ struct TodoRow: View {
                 .font(DS.Fonts.rowTitle)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+
+            ProviderTag(provider: session.provider)
 
             Spacer(minLength: 12)
 
@@ -190,7 +194,7 @@ struct TodoRow: View {
 /// 运行行 —— 呼吸蓝点 + 项目名 + 实时跳动的运行时长
 /// 无操作,纯感知;所以不做 hover 高亮,保持安静。
 struct RunningRow: View {
-    let session: CodexSessionSummary
+    let session: SessionSummary
 
     var body: some View {
         HStack(spacing: DS.Metrics.rowSpacing) {
@@ -201,9 +205,11 @@ struct RunningRow: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
 
+            ProviderTag(provider: session.provider)
+
             Spacer(minLength: 12)
 
-            // 运行时长:session_meta 启动时间;缺失时退化为文件 mtime
+            // 运行时长:session 启动时间;缺失时退化为文件 mtime
             ElapsedTimeText(since: session.startedAt ?? session.modifiedAt)
         }
         .padding(.vertical, DS.Metrics.rowPaddingV)
@@ -380,12 +386,33 @@ private extension String {
     .background(.background)
 }
 
+// MARK: - 源标签
+
+/// 混排列表里用克制 secondary 标签区分 Codex / Grok
+struct ProviderTag: View {
+    let provider: AgentProvider
+
+    var body: some View {
+        Text(provider.label)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+            )
+            .accessibilityLabel("来源 \(provider.label)")
+    }
+}
+
 // MARK: - Mock
 
-extension CodexSessionSummary {
-    static var mockTodo: CodexSessionSummary {
-        CodexSessionSummary(
-            id: "todo-1",
+extension SessionSummary {
+    static var mockTodo: SessionSummary {
+        SessionSummary(
+            provider: .codex,
+            sessionID: "todo-1",
             filePath: "/tmp/rollout-a.jsonl",
             cwd: "/Users/example/workspace/agent-inbox",
             startedAt: Date().addingTimeInterval(-1800),
@@ -396,10 +423,11 @@ extension CodexSessionSummary {
         )
     }
 
-    static var mockTodo2: CodexSessionSummary {
-        CodexSessionSummary(
-            id: "todo-2",
-            filePath: "/tmp/rollout-b.jsonl",
+    static var mockTodo2: SessionSummary {
+        SessionSummary(
+            provider: .grok,
+            sessionID: "todo-2",
+            filePath: "/tmp/grok-session-b",
             cwd: "/Users/example/workspace/_all_do",
             startedAt: Date().addingTimeInterval(-7200),
             modifiedAt: Date().addingTimeInterval(-3600),
@@ -409,10 +437,11 @@ extension CodexSessionSummary {
         )
     }
 
-    static var mockRunning: CodexSessionSummary {
-        CodexSessionSummary(
-            id: "run-1",
-            filePath: "/tmp/rollout-c.jsonl",
+    static var mockRunning: SessionSummary {
+        SessionSummary(
+            provider: .grok,
+            sessionID: "run-1",
+            filePath: "/tmp/grok-session-c",
             cwd: "/Users/example/workspace/side-project",
             startedAt: Date().addingTimeInterval(-154),
             modifiedAt: Date(),

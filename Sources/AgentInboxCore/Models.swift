@@ -68,8 +68,51 @@ public enum PinMode: String, Codable, CaseIterable, Sendable, Identifiable {
     }
 }
 
-/// Codex turn 生命周期状态,来自 rollout 尾部最近的 lifecycle event。
-public enum CodexTurnLifecycleState: String, Codable, Equatable, Sendable {
+/// 会话源:会话数据来自哪一类 agent 工具。
+public enum AgentProvider: String, Codable, CaseIterable, Sendable, Identifiable {
+    case codex
+    case grok
+
+    public var id: String { rawValue }
+
+    /// UI 标签文案
+    public var label: String {
+        switch self {
+        case .codex:
+            "Codex"
+        case .grok:
+            "Grok"
+        }
+    }
+}
+
+/// 会话身份工具:源原生 id 保持不变,完成集合/ForEach 使用复合键。
+public enum SessionIdentity {
+    /// `provider:sessionID`,保证跨源唯一。
+    public static func key(provider: AgentProvider, sessionID: String) -> String {
+        "\(provider.rawValue):\(sessionID)"
+    }
+
+    /// 读库归一:旧 completed 无前缀 id 视为 Codex。
+    public static func normalizeCompletedID(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+
+        if let separator = trimmed.firstIndex(of: ":") {
+            let prefix = String(trimmed[..<separator])
+            let rest = String(trimmed[trimmed.index(after: separator)...])
+            if AgentProvider(rawValue: prefix) != nil, !rest.isEmpty {
+                return trimmed
+            }
+        }
+
+        return key(provider: .codex, sessionID: trimmed)
+    }
+}
+
+/// Turn 生命周期状态(跨源统一)。
+/// Codex 来自 rollout 尾部 lifecycle event;Grok 由 events.jsonl + 进程存活合成。
+public enum TurnLifecycleState: String, Codable, Equatable, Sendable {
     case running
     case completed
     case aborted
@@ -153,7 +196,7 @@ public struct PromptFilterRule: Codable, Equatable, Sendable, Identifiable {
         self.updatedAt = updatedAt
     }
 
-    public func matches(_ summary: CodexSessionSummary) -> Bool {
+    public func matches(_ summary: SessionSummary) -> Bool {
         guard isEnabled, action == .hideFromTodos else { return false }
 
         let value = switch field {
@@ -174,40 +217,43 @@ public struct PromptFilterRule: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-/// 单个 Codex 会话摘要
-/// 由 rollout 文件头部 `session_meta` 与尾部生命周期事件合并而来。
-public struct CodexSessionSummary: Codable, Equatable, Sendable, Identifiable {
-    public let id: String
+/// 跨源会话摘要。
+/// Codex:rollout head/tail;Grok:summary.json + events + 进程存活。
+public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
+    /// 会话源
+    public let provider: AgentProvider
+    /// 源原生会话 id(Codex/Grok 均保持原格式,不加前缀)
+    public let sessionID: String
     public let filePath: String
-    /// 会话工作目录(session_meta.payload.cwd),UI 用它展示项目名
+    /// 会话工作目录,UI 用它展示项目名
     public let cwd: String?
-    /// 会话启动时间(session_meta.payload.timestamp),UI 用它计算运行时长
+    /// 会话启动时间,UI 用它计算运行时长
     public let startedAt: Date?
-    /// rollout 文件最后修改时间,用于活跃度判定
+    /// 内容最近变更时间,用于活跃度/stale 判定
     public let modifiedAt: Date
-    /// 最近的 turn 生命周期;aborted/rolledBack 不应继续显示为运行中
-    public let lifecycleState: CodexTurnLifecycleState
-    /// task_complete 事件时间;nil 表示任务尚未结束
+    /// 最近 turn 生命周期;aborted/rolledBack/unknown 不进运行中/待办
+    public let lifecycleState: TurnLifecycleState
+    /// 完成时间;nil 表示尚未以「可确认完成」形态结束
     public let taskCompletedAt: Date?
-    /// task_complete.last_agent_message,焦点卡「答」段:Codex 最后交付了什么
+    /// 焦点卡「答」:agent 最后交付摘要
     public let lastAgentMessage: String?
-    /// 会话首个用户提示词(rollout 首个 event_msg/user_message,已跳过注入的
-    /// developer/环境上下文;取首个非空行并截断)。焦点卡「问」段展示这活儿的由来;
-    /// nil = head 窗口内未捕获到用户输入。
+    /// 焦点卡「问」:首个用户提示词(已清洗截断);nil = 未捕获
     public let firstPrompt: String?
 
     public init(
-        id: String,
+        provider: AgentProvider = .codex,
+        sessionID: String,
         filePath: String,
         cwd: String?,
         startedAt: Date?,
         modifiedAt: Date,
-        lifecycleState: CodexTurnLifecycleState? = nil,
+        lifecycleState: TurnLifecycleState? = nil,
         taskCompletedAt: Date?,
         lastAgentMessage: String?,
         firstPrompt: String? = nil
     ) {
-        self.id = id
+        self.provider = provider
+        self.sessionID = sessionID
         self.filePath = filePath
         self.cwd = cwd
         self.startedAt = startedAt
@@ -218,11 +264,16 @@ public struct CodexSessionSummary: Codable, Equatable, Sendable, Identifiable {
         self.firstPrompt = firstPrompt
     }
 
+    /// ForEach / 完成集合唯一键:`provider:sessionID`
+    public var id: String {
+        SessionIdentity.key(provider: provider, sessionID: sessionID)
+    }
+
     public var isTaskComplete: Bool {
         taskCompletedAt != nil
     }
 
-    /// 项目名:cwd 最后一段;无 cwd 时退化为 rollout 文件名(去扩展名)
+    /// 项目名:cwd 最后一段;无 cwd 时退化为路径末段
     public var projectName: String {
         if let cwd, !cwd.isEmpty {
             return URL(filePath: cwd).lastPathComponent
@@ -234,15 +285,15 @@ public struct CodexSessionSummary: Codable, Equatable, Sendable, Identifiable {
 /// 全量状态快照 —— V4 用「待办优先的列表」取代单焦点状态机
 public struct AgentSnapshot: Equatable, Sendable {
     /// 等待确认的会话,新完成的排前面
-    public let todos: [CodexSessionSummary]
+    public let todos: [SessionSummary]
     /// 运行中的会话,最近活跃的排前面
-    public let running: [CodexSessionSummary]
+    public let running: [SessionSummary]
     /// 历史上是否手动完成过任务(区分「从未有任务」与「全部处理完」)
     public let hasCompletedHistory: Bool
 
     public init(
-        todos: [CodexSessionSummary],
-        running: [CodexSessionSummary],
+        todos: [SessionSummary],
+        running: [SessionSummary],
         hasCompletedHistory: Bool
     ) {
         self.todos = todos
@@ -258,7 +309,7 @@ public struct AgentSnapshot: Equatable, Sendable {
 
     /// 只把已观察为运行中、随后进入待办的同一会话视为新待办。
     /// 直接从空快照发现的历史待办不会触发启动通知。
-    public func newTodos(comparedTo previous: AgentSnapshot) -> [CodexSessionSummary] {
+    public func newTodos(comparedTo previous: AgentSnapshot) -> [SessionSummary] {
         let previouslyRunningIDs = Set(previous.running.map(\.id))
         return todos.filter { previouslyRunningIDs.contains($0.id) }
     }
@@ -331,9 +382,10 @@ public struct OpenSessionConfig: Codable, Equatable, Sendable {
 
     /// 支持的模板变量列表（用于 UI 提示）
     public static let supportedVariables: [(name: String, description: String)] = [
-        ("$session_id", "会话 ID"),
+        ("$session_id", "源原生会话 ID"),
+        ("$provider", "会话源(codex/grok)"),
         ("$cwd", "工作目录路径"),
-        ("$file_path", "rollout 文件路径"),
+        ("$file_path", "会话文件或目录路径"),
         ("$project_name", "项目名称")
     ]
 

@@ -45,7 +45,8 @@ func stateStorePersistsSettingsAndCompletedSessionsInSQLite() async throws {
     let loaded = await store.load()
 
     #expect(loaded.pinMode == .todoOnly)
-    #expect(loaded.completedSessionIDs == ["session-a", "session-b"])
+    // 旧无前缀 id 写出/读回时归一为 codex: 复合键
+    #expect(loaded.completedSessionIDs == ["codex:session-a", "codex:session-b"])
     #expect(abs(loaded.trackingStartedAt.timeIntervalSince1970 - 123_456) < 0.001)
     #expect(loaded.panelAnchor == nil) // 未保存过锚点 → nil
     #expect(loaded.promptFilterRules == state.promptFilterRules)

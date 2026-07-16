@@ -5,12 +5,13 @@ import Testing
 /// 构造状态转换测试所需的最小会话摘要。
 private func makeTransitionSummary(
     id: String,
-    lifecycleState: CodexTurnLifecycleState,
+    lifecycleState: TurnLifecycleState,
     taskCompletedAt: Date? = nil
-) -> CodexSessionSummary {
+) -> SessionSummary {
     let now = Date(timeIntervalSince1970: 10_000)
-    return CodexSessionSummary(
-        id: id,
+    return SessionSummary(
+            provider: .codex,
+            sessionID: id,
         filePath: "/tmp/rollout-\(id).jsonl",
         cwd: "/tmp/project-\(id)",
         startedAt: now.addingTimeInterval(-60),
@@ -33,7 +34,7 @@ func runningSessionTransitioningToTodoIsNewTodo() {
     let previous = AgentSnapshot(todos: [], running: [running], hasCompletedHistory: false)
     let next = AgentSnapshot(todos: [todo], running: [], hasCompletedHistory: false)
 
-    #expect(next.newTodos(comparedTo: previous).map(\.id) == ["session"])
+    #expect(next.newTodos(comparedTo: previous).map(\.id) == ["codex:session"])
 }
 
 @Test
@@ -85,5 +86,5 @@ func multipleRunningSessionsTransitionInTodoOrder() {
     )
 
     // 保留新快照排序，但排除原本已存在的待办。
-    #expect(next.newTodos(comparedTo: previous).map(\.id) == ["second", "first"])
+    #expect(next.newTodos(comparedTo: previous).map(\.id) == ["codex:second", "codex:first"])
 }

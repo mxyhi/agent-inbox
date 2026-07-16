@@ -4,15 +4,16 @@ import XCTest
 /// OpenSessionExecutor 单元测试
 final class OpenSessionExecutorTests: XCTestCase {
     var executor: OpenSessionExecutor!
-    var mockSession: CodexSessionSummary!
+    var mockSession: SessionSummary!
 
     override func setUp() {
         super.setUp()
         executor = OpenSessionExecutor()
 
         // 创建测试用 Mock 会话
-        mockSession = CodexSessionSummary(
-            id: "test-session-123",
+        mockSession = SessionSummary(
+            provider: .codex,
+            sessionID: "test-session-123",
             filePath: "/tmp/rollout-test.jsonl",
             cwd: "/tmp/test-workspace",
             startedAt: Date(),
@@ -41,8 +42,9 @@ final class OpenSessionExecutorTests: XCTestCase {
 
     func testExecuteFinder_WithoutCwd() {
         // Given: 会话没有 cwd（应 fallback 到定位 rollout 文件）
-        let sessionWithoutCwd = CodexSessionSummary(
-            id: "test-no-cwd",
+        let sessionWithoutCwd = SessionSummary(
+            provider: .codex,
+            sessionID: "test-no-cwd",
             filePath: "/tmp/rollout-test.jsonl",
             cwd: nil,
             startedAt: Date(),
@@ -153,9 +155,10 @@ final class OpenSessionExecutorTests: XCTestCase {
         // Given/When: 获取支持的变量列表
         let variables = OpenSessionConfig.supportedVariables
 
-        // Then: 应包含 4 个变量
-        XCTAssertEqual(variables.count, 4)
+        // Then: 应包含会话 id/源/路径相关变量
+        XCTAssertEqual(variables.count, 5)
         XCTAssertTrue(variables.contains { $0.name == "$session_id" })
+        XCTAssertTrue(variables.contains { $0.name == "$provider" })
         XCTAssertTrue(variables.contains { $0.name == "$cwd" })
         XCTAssertTrue(variables.contains { $0.name == "$file_path" })
         XCTAssertTrue(variables.contains { $0.name == "$project_name" })

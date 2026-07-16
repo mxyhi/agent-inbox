@@ -1,9 +1,9 @@
 import Foundation
 import OSLog
 
-/// Codex rollout 会话监控器(V4)
+/// Codex rollout 会话监控器
 ///
-/// 扫描 `~/.codex/sessions` 下最近的 rollout jsonl 文件,产出 `CodexSessionSummary`。
+/// 扫描 `~/.codex/sessions` 下最近的 rollout jsonl 文件,产出 `SessionSummary`(provider=.codex)。
 /// 设计为 actor 的原因:
 /// - 扫描与解析全部运行在 actor 的后台 executor 上,主线程零文件 IO;
 /// - actor 隔离天然保护 mtime 缓存的并发安全,mtime 未变的文件直接命中缓存、跳过解析。
@@ -11,7 +11,7 @@ public actor CodexSessionMonitor {
     /// 缓存条目:文件 mtime + 上次解析出的摘要
     private struct CachedEntry {
         let modifiedAt: Date
-        let summary: CodexSessionSummary
+        let summary: SessionSummary
     }
 
     /// rollout 单行外层信封(head/tail 共用),只解码判定所需的字段
@@ -59,7 +59,7 @@ public actor CodexSessionMonitor {
 
     /// tail 解析结果:最近 lifecycle event 与 task_complete 附带信息
     private struct TailInfo {
-        var lifecycleState: CodexTurnLifecycleState = .unknown
+        var lifecycleState: TurnLifecycleState = .unknown
         var taskCompletedAt: Date?
         var lastAgentMessage: String?
     }
@@ -103,7 +103,7 @@ public actor CodexSessionMonitor {
     }
 
     /// 扫描最近 rollout 文件,返回会话摘要(mtime 未变的文件直接命中缓存,不重新解析)
-    public func scan() -> [CodexSessionSummary] {
+    public func scan() -> [SessionSummary] {
         // FileManager 非 Sendable,不作为属性持有,方法内局部使用共享实例
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: sessionsRoot.path) else {
@@ -113,7 +113,7 @@ public actor CodexSessionMonitor {
 
         let files = recentRolloutFiles(fileManager: fileManager)
         var cacheHits = 0
-        var summaries: [CodexSessionSummary] = []
+        var summaries: [SessionSummary] = []
         summaries.reserveCapacity(files.count)
 
         for file in files {
@@ -143,7 +143,7 @@ public actor CodexSessionMonitor {
     }
 
     /// 增量扫描 FSEvents 命中的路径:只重读变更的 rollout 文件;目录级事件或空缓存时回退 full scan
-    public func scanChangedPaths(_ changedPaths: [String]) -> [CodexSessionSummary] {
+    public func scanChangedPaths(_ changedPaths: [String]) -> [SessionSummary] {
         guard !changedPaths.isEmpty else {
             return cachedSummaries()
         }
@@ -251,7 +251,7 @@ public actor CodexSessionMonitor {
         }
     }
 
-    private func cachedSummaries() -> [CodexSessionSummary] {
+    private func cachedSummaries() -> [SessionSummary] {
         Array(cache.values.sorted { $0.modifiedAt > $1.modifiedAt }.prefix(maxFiles))
             .map(\.summary)
     }
@@ -282,7 +282,7 @@ public actor CodexSessionMonitor {
     // MARK: - 单文件解析
 
     /// 解析单个 rollout 文件:head 取 session_meta(id/cwd/startedAt),tail 取最近生命周期事件
-    private func parseRollout(at url: URL, modifiedAt: Date) throws -> CodexSessionSummary {
+    private func parseRollout(at url: URL, modifiedAt: Date) throws -> SessionSummary {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
 
@@ -290,9 +290,11 @@ public actor CodexSessionMonitor {
         let head = parseHead(handle: handle, decoder: decoder, url: url)
         let tail = parseTail(handle: handle, decoder: decoder, url: url, modifiedAt: modifiedAt)
 
-        return CodexSessionSummary(
+        // 源原生 id 保持原值;provider 固定 codex,复合键由 SessionSummary.id 计算
+        return SessionSummary(
+            provider: .codex,
             // 首行缺 session_meta 或解析失败时,退化为文件名(去扩展名)作为稳定 ID
-            id: head.sessionID ?? url.deletingPathExtension().lastPathComponent,
+            sessionID: head.sessionID ?? url.deletingPathExtension().lastPathComponent,
             filePath: url.path,
             cwd: head.cwd,
             startedAt: head.startedAt,

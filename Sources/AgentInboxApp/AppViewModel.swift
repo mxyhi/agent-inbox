@@ -4,8 +4,7 @@ import AgentInboxCore
 import OSLog
 
 /// 主 ViewModel —— 串联「后台扫描 → 快照解析 → UI 发布」
-/// V4:AgentDisplayState 单焦点状态机已废弃,改为 AgentSnapshot 列表快照;
-/// 扫描跑在 CodexSessionMonitor actor 上,主线程零文件 IO。
+/// 扫描跑在 CompositeSessionMonitor(Codex+Grok) 上,主线程零文件 IO。
 @MainActor
 final class AppViewModel: ObservableObject {
     @Published private(set) var snapshot: AgentSnapshot = .empty
@@ -15,8 +14,8 @@ final class AppViewModel: ObservableObject {
     @Published var openSessionConfig: OpenSessionConfig = OpenSessionConfig()
     @Published var updateProxyConfig: NetworkProxyConfig = NetworkProxyConfig()
 
-    private let monitor: CodexSessionMonitor
-    private let resolver: CodexStatusResolver
+    private let monitor: CompositeSessionMonitor
+    private let resolver: AgentStatusResolver
     private let stateStore: StateStore
     private let executor: OpenSessionExecutor
     private let notificationController: UserNotificationController
@@ -24,13 +23,13 @@ final class AppViewModel: ObservableObject {
     private var persistedState = PersistedState()
     private var reconcileTask: Task<Void, Never>?
     private var debounceTask: Task<Void, Never>?
-    private var watcher: CodexSessionsWatcher?
+    private var watcher: SessionsWatcher?
     private var pendingChangedPaths: Set<String> = []
     private var hasLoadedInitialSnapshot = false
 
     init(
-        monitor: CodexSessionMonitor = CodexSessionMonitor(),
-        resolver: CodexStatusResolver = CodexStatusResolver(),
+        monitor: CompositeSessionMonitor = CompositeSessionMonitor(),
+        resolver: AgentStatusResolver = AgentStatusResolver(),
         stateStore: StateStore = StateStore(),
         executor: OpenSessionExecutor = OpenSessionExecutor(),
         notificationController: UserNotificationController = UserNotificationController()
@@ -69,7 +68,7 @@ final class AppViewModel: ObservableObject {
     func start() async {
         guard reconcileTask == nil, watcher == nil else { return }
 
-        watcher = CodexSessionsWatcher(root: monitor.sessionsRoot) { [weak self] paths in
+        watcher = SessionsWatcher(roots: monitor.watchRoots) { [weak self] paths in
             Task { @MainActor [weak self] in
                 self?.scheduleIncrementalRefresh(paths: paths)
             }
@@ -346,7 +345,7 @@ final class AppViewModel: ObservableObject {
             parts.append("\(snapshot.running.count) 个运行中")
         }
         if parts.isEmpty {
-            return snapshot.hasCompletedHistory ? "全部完成" : "暂无 Codex 任务"
+            return snapshot.hasCompletedHistory ? "全部完成" : "暂无 Agent 任务"
         }
         return parts.joined(separator: " · ")
     }
@@ -382,7 +381,7 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    private func publish(summaries: [CodexSessionSummary]) {
+    private func publish(summaries: [SessionSummary]) {
         let next = resolver.resolve(
             summaries: summaries,
             completedSessionIDs: persistedState.completedSessionIDs,
@@ -399,7 +398,7 @@ final class AppViewModel: ObservableObject {
     }
 
     /// 同一轮多个完成事件合并为一条系统通知，避免连续播放多次声音。
-    private func notifyNewTodos(_ todos: [CodexSessionSummary]) {
+    private func notifyNewTodos(_ todos: [SessionSummary]) {
         guard !todos.isEmpty else { return }
 
         let title = todos.count == 1 ? "有新待办" : "有 \(todos.count) 个新待办"

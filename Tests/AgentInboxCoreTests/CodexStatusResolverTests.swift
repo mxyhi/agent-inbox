@@ -6,13 +6,14 @@ import Testing
 private func makeSummary(
     id: String,
     modifiedAt: Date,
-    lifecycleState: CodexTurnLifecycleState? = nil,
+    lifecycleState: TurnLifecycleState? = nil,
     taskCompletedAt: Date? = nil,
     lastAgentMessage: String? = nil,
     firstPrompt: String? = nil
-) -> CodexSessionSummary {
-    CodexSessionSummary(
-        id: id,
+) -> SessionSummary {
+    SessionSummary(
+            provider: .codex,
+            sessionID: id,
         filePath: "/tmp/rollout-\(id).jsonl",
         cwd: "/tmp/project-\(id)",
         startedAt: modifiedAt.addingTimeInterval(-60),
@@ -136,7 +137,7 @@ func runningSessionsAreAllKeptAndSortedByRecency() {
     )
 
     // V4:running 保留全部活跃会话,最近写入的排前面
-    #expect(snapshot.running.map(\.id) == ["run-newer", "run-older"])
+    #expect(snapshot.running.map(\.id) == ["codex:run-newer", "codex:run-older"])
     #expect(snapshot.todos.isEmpty)
     #expect(snapshot.isActive)
     #expect(!snapshot.hasTodo)
@@ -165,7 +166,7 @@ func todosAreAllKeptAndSortedByCompletionTime() {
     )
 
     // V4:todos 保留全部待确认会话,按 taskCompletedAt 降序(新完成的在前)
-    #expect(snapshot.todos.map(\.id) == ["todo-later", "todo-earlier"])
+    #expect(snapshot.todos.map(\.id) == ["codex:todo-later", "codex:todo-earlier"])
     #expect(snapshot.running.isEmpty)
     #expect(snapshot.hasTodo)
     #expect(!snapshot.isActive)
@@ -198,7 +199,7 @@ func promptFilterRulesHideMatchingFirstPromptTodos() {
         now: now
     )
 
-    #expect(snapshot.todos.map(\.id) == ["real-task"])
+    #expect(snapshot.todos.map(\.id) == ["codex:real-task"])
 }
 
 @Test
@@ -223,7 +224,7 @@ func disabledPromptFilterRulesDoNotHideTodos() {
         now: now
     )
 
-    #expect(snapshot.todos.map(\.id) == ["title-task"])
+    #expect(snapshot.todos.map(\.id) == ["codex:title-task"])
 }
 
 @Test
@@ -263,7 +264,7 @@ func staleIncompleteSessionIsDroppedFromRunning() {
         now: now
     )
 
-    #expect(snapshot.running.map(\.id) == ["fresh"])
+    #expect(snapshot.running.map(\.id) == ["codex:fresh"])
     #expect(snapshot.todos.isEmpty)
 }
 
@@ -298,8 +299,8 @@ func abortedAndRolledBackSessionsAreDroppedFromRunningAndTodos() {
         now: now
     )
 
-    #expect(snapshot.running.map(\.id) == ["started"])
-    #expect(snapshot.todos.map(\.id) == ["completed"])
+    #expect(snapshot.running.map(\.id) == ["codex:started"])
+    #expect(snapshot.todos.map(\.id) == ["codex:completed"])
 }
 
 @Test
@@ -318,12 +319,12 @@ func confirmedTodosAreFilteredOutAndFeedHistory() {
 
     let snapshot = CodexStatusResolver().resolve(
         summaries: [confirmed, pending],
-        completedSessionIDs: ["todo-confirmed"],
+        completedSessionIDs: ["codex:todo-confirmed"],
         now: now
     )
 
     // 用户已确认的会话从待办中剔除,同时点亮历史标记
-    #expect(snapshot.todos.map(\.id) == ["todo-pending"])
+    #expect(snapshot.todos.map(\.id) == ["codex:todo-pending"])
     #expect(snapshot.hasCompletedHistory)
 }
 
@@ -348,7 +349,7 @@ func expiredTodosAreDroppedByRetentionWindow() {
         now: now
     )
 
-    #expect(snapshot.todos.map(\.id) == ["todo-fresh"])
+    #expect(snapshot.todos.map(\.id) == ["codex:todo-fresh"])
 }
 
 @Test
@@ -374,7 +375,7 @@ func todosCompletedBeforeTrackingStartedAtAreHidden() {
     )
 
     // 首次打开 app 之前已经结束的历史会话不进入待办,避免安装后刷出一堆旧任务
-    #expect(snapshot.todos.map(\.id) == ["new-after-install"])
+    #expect(snapshot.todos.map(\.id) == ["codex:new-after-install"])
 }
 
 @Test
@@ -382,7 +383,7 @@ func historyFlagReflectsCompletedIDsEvenWithoutSummaries() {
     // 扫描结果为空但历史确认集合非空(rollout 被清理/滚动出窗口)→ 仍是「全部处理完」而非「从未有任务」
     let snapshot = CodexStatusResolver().resolve(
         summaries: [],
-        completedSessionIDs: ["old-session"],
+        completedSessionIDs: ["codex:old-session"],
         now: Date(timeIntervalSince1970: 10_000)
     )
 
