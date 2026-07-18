@@ -382,6 +382,10 @@ final class AppViewModel: ObservableObject {
     }
 
     private func publish(summaries: [SessionSummary]) {
+        // 同会话多轮:用户曾确认「等下一步」后,一旦 agent 再次 running,
+        // 必须从 completed 集合摘掉,否则下一轮 turn_ended 不会再进待办/通知。
+        rearmCompletedSessionsIfRunning(summaries)
+
         let next = resolver.resolve(
             summaries: summaries,
             completedSessionIDs: persistedState.completedSessionIDs,
@@ -397,15 +401,35 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    /// 会话重新进入 running 时解除完成标记,允许下一轮「等下一步」再次成为待办。
+    private func rearmCompletedSessionsIfRunning(_ summaries: [SessionSummary]) {
+        let runningIDs = Set(
+            summaries
+                .filter { $0.lifecycleState == .running }
+                .map(\.id)
+        )
+        guard !runningIDs.isEmpty else { return }
+
+        let rearmed = persistedState.completedSessionIDs.intersection(runningIDs)
+        guard !rearmed.isEmpty else { return }
+
+        persistedState.completedSessionIDs.subtract(rearmed)
+        logger.info("会话再次运行,已解除 \(rearmed.count) 个完成标记以便多轮待办")
+        Task {
+            await stateStore.save(persistedState)
+        }
+    }
+
     /// 同一轮多个完成事件合并为一条系统通知，避免连续播放多次声音。
     private func notifyNewTodos(_ todos: [SessionSummary]) {
         guard !todos.isEmpty else { return }
 
         let title = todos.count == 1 ? "有新待办" : "有 \(todos.count) 个新待办"
+        // 产品语义:agent 停住等你下一步(不只是「会话结束」)
         let message = if let todo = todos.first, todos.count == 1 {
-            "\(todo.projectName) 的 Agent 会话已完成，等待处理"
+            "\(todo.projectName) 的 Agent 等待下一步提示"
         } else {
-            "\(todos.count) 个 Agent 会话已完成，等待处理"
+            "\(todos.count) 个 Agent 等待下一步提示"
         }
         notificationController.show(
             title: title,

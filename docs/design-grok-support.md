@@ -1,14 +1,14 @@
 # 设计：支持 Grok 会话源
 
-**状态**: P0 已实现（2026-07-15）  
-**日期**: 2026-07-15  
+**状态**: P0 已实现（2026-07-15）
+**日期**: 2026-07-15
 **范围**: Agent Inbox 从「仅 Codex」扩展为「多 Agent 源」，首批落地 Grok
 
 ### 已锁定决策
 
 | # | 决策 |
 | --- | --- |
-| 1 | 待办触发：进程退出才进待办（非每次 `turn_ended`） |
+| 1 | 待办触发：`turn_ended(completed)` 即进待办（= agent 等下一步提示；**不**等进程退出） |
 | 2 | 会话 id **不改前缀**；新增 `provider` 字段；完成集合用复合键 |
 | 3 | UI：混排 + 源标签 |
 | 4 | 默认 Codex+Grok 双源全开，**不做**设置开关 |
@@ -95,33 +95,33 @@ Agent Inbox 只扫描 `~/.codex/sessions/**/rollout-*.jsonl`：
 | `updates.jsonl` → `user_message_chunk` | firstPrompt |
 | `updates.jsonl` → `agent_message_chunk` | lastAgentMessage（拼最近一轮 text） |
 
-### 2.4 Grok 状态机（与 Codex 对齐产品语义）
+### 2.4 Grok 状态机（产品语义：agent 等下一步提示）
 
-Grok 是交互式 TUI，**不能**把每次 `turn_ended` 都当待办（会刷屏）。采用「会话级待办 + 轮次级运行中」：
+产品目标是**提示用户 agent 已停住、在等下一步提示**，不是等 TUI 进程退出。
+`turn_ended(completed)` = 一轮交付结束 = 待办；进程仍活是交互式常态。
 
 ```
                     turn_started
    (hidden/idle) ───────────────► running
          ▲                           │
-         │                     turn_ended
-         │  (进程仍活, 等用户输入)      │
+         │                     turn_ended(completed)
+         │  用户再发消息 / 下一轮        │
          └───────────────────────────┘
-                                     │
-                          进程退出且曾有 completed turn
                                      ▼
-                                   todo
+                                   todo  ← 进程活着也进待办
                                      │
                               用户点完成
                                      ▼
                                   (hidden)
+                     再次 turn_started 时解除完成标记
 ```
 
 | 状态 | 判定 |
 | --- | --- |
-| **running** | `events` 尾部最近 turn 生命周期为 started（无后续 ended），**且** pid 存活（或 mtime 极新作兜底） |
-| **todo** | 会话 **不在** 存活进程集合；最近 `turn_ended.outcome=completed` 时间在 retention 内；未确认；且有有效用户输入（避免空会话） |
-| **忽略** | 进程存活但 turn 已 ended（等用户输入）→ 不算运行中也不算待办；无用户 query 的空会话；aborted 且无有效交付可按忽略或弱待办（首版：**忽略**） |
-| **stale running** | mid-turn 但 pid 死且超过 stale 窗 → 不展示 running；若有 completed 历史可落 todo，否则忽略 |
+| **running** | `events` 尾部最近 turn 为 started（无后续 ended），**且** pid 存活 |
+| **todo** | 最近 `turn_ended.outcome=completed`；未确认（或已确认但之后又 running 过并再 ended）；完成时间在 retention 内；有有效用户输入 |
+| **忽略** | 无用户 query 的空会话；aborted；mid-turn 但 pid 已死 |
+| **stale running** | mid-turn 但 pid 死 → 不展示 running |
 
 **身份规范（决策 2）**：
 
@@ -255,7 +255,8 @@ public protocol SessionMonitoring: Sendable {
 | A. 只在 UI 再开一个 Grok 列表 | 双状态机、双完成集合 | 否：产品要统一关注面 |
 | B. 把 Grok 伪造成 Codex jsonl | 脆弱适配 | 否：格式差太大 |
 | C. 统一 SessionSummary + 多 Monitor | 深模块边界清晰 | **采用** |
-| D. turn_ended 即待办 | 交互式会话刷屏 | 否：改会话退出才待办 |
+| D. 进程退出才待办 | 错过「等下一步」主场景 | 否：产品要的就是 turn_ended 提醒 |
+| E. turn_ended 即待办 | 对齐「agent 等下一步」 | **采用**；同会话多轮靠完成标记在 running 时 rearm |
 
 ---
 
@@ -287,8 +288,8 @@ public protocol SessionMonitoring: Sendable {
 **验收**
 
 - 存活 Grok 且 mid-turn → 运行中 + Grok 标签。
-- turn_ended 但进程仍活 → **不**进待办。
-- 退出 Grok 且 24h 内有 completed turn → 待办；完成写入 `grok:<uuid>`。
+- turn_ended 且进程仍活 → **进待办**（等下一步提示）。
+- 用户确认后同一会话再 turn_started → 解除完成标记；再 turn_ended → 再次待办/通知。
 - Codex 回归：`swift test` 全绿；旧 completed 无前缀 id 仍能命中（读时归一）。
 
 ### P1 — 体验（可选后续）

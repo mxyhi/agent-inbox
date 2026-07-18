@@ -38,6 +38,13 @@ private func writeActiveSessions(root: URL, records: [[String: Any]]) throws -> 
     return file
 }
 
+/// fixture 时间必须落在 todo retention(24h) 内,用相对 now 的 ISO8601
+private func iso8601(_ date: Date) -> String {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter.string(from: date)
+}
+
 @Test
 func grokMonitorMarksMidTurnAliveProcessAsRunning() async throws {
     let root = try makeGrokFixtureRoot()
@@ -79,10 +86,13 @@ func grokMonitorMarksMidTurnAliveProcessAsRunning() async throws {
 }
 
 @Test
-func grokMonitorHidesEndedTurnWhileProcessAlive() async throws {
+func grokMonitorMarksEndedTurnWhileProcessAliveAsWaitingForNextPrompt() async throws {
     let root = try makeGrokFixtureRoot()
     defer { try? FileManager.default.removeItem(at: root) }
 
+    let now = Date()
+    let started = iso8601(now.addingTimeInterval(-60))
+    let ended = iso8601(now.addingTimeInterval(-10))
     let sessionID = "019f-test-idle"
     let cwd = "/tmp/grok-idle"
     _ = try writeGrokSession(
@@ -90,13 +100,18 @@ func grokMonitorHidesEndedTurnWhileProcessAlive() async throws {
         sessionID: sessionID,
         cwd: cwd,
         summaryBody: """
-        {"info":{"id":"\(sessionID)","cwd":"\(cwd)"},"created_at":"2026-07-15T12:00:00.000Z","updated_at":"2026-07-15T12:05:00.000Z","last_active_at":"2026-07-15T12:05:00.000Z","generated_title":"Idle","num_chat_messages":4}
+        {"info":{"id":"\(sessionID)","cwd":"\(cwd)"},"created_at":"\(started)","updated_at":"\(ended)","last_active_at":"\(ended)","generated_title":"Idle","num_chat_messages":4}
         """,
         eventsBody: """
-        {"ts":"2026-07-15T12:00:01.000Z","type":"turn_started"}
-        {"ts":"2026-07-15T12:00:10.000Z","type":"turn_ended","outcome":"completed"}
+        {"ts":"\(started)","type":"turn_started"}
+        {"ts":"\(ended)","type":"turn_ended","outcome":"completed"}
+        """,
+        updatesBody: """
+        {"method":"session/update","params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"继续改"}}}}
+        {"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"改完了,等你指示"}}}}
         """
     )
+    // 进程仍活:交互式 TUI 常态,正是「等下一步提示」要提醒的时刻
     let activeFile = try writeActiveSessions(root: root, records: [
         ["session_id": sessionID, "pid": Int(getpid()), "cwd": cwd]
     ])
@@ -104,9 +119,18 @@ func grokMonitorHidesEndedTurnWhileProcessAlive() async throws {
     let monitor = GrokSessionMonitor(sessionsRoot: root, activeSessionsFile: activeFile)
     let summary = try #require(await monitor.scan().first)
 
-    // 进程仍活 + turn 已结束 = 等用户输入,不进 running/todo
-    #expect(summary.lifecycleState == .unknown)
-    #expect(summary.taskCompletedAt == nil)
+    #expect(summary.lifecycleState == .completed)
+    #expect(summary.taskCompletedAt != nil)
+    #expect(summary.lastAgentMessage == "改完了,等你指示")
+
+    let snapshot = AgentStatusResolver().resolve(
+        summaries: [summary],
+        completedSessionIDs: [],
+        trackingStartedAt: .distantPast,
+        now: now
+    )
+    #expect(snapshot.todos.map(\.id) == ["grok:\(sessionID)"])
+    #expect(snapshot.running.isEmpty)
 }
 
 @Test
@@ -114,6 +138,9 @@ func grokMonitorMarksDeadProcessWithCompletedTurnAsTodoCandidate() async throws 
     let root = try makeGrokFixtureRoot()
     defer { try? FileManager.default.removeItem(at: root) }
 
+    let now = Date()
+    let started = iso8601(now.addingTimeInterval(-120))
+    let ended = iso8601(now.addingTimeInterval(-30))
     let sessionID = "019f-test-todo"
     let cwd = "/tmp/grok-todo"
     _ = try writeGrokSession(
@@ -121,11 +148,11 @@ func grokMonitorMarksDeadProcessWithCompletedTurnAsTodoCandidate() async throws 
         sessionID: sessionID,
         cwd: cwd,
         summaryBody: """
-        {"info":{"id":"\(sessionID)","cwd":"\(cwd)"},"created_at":"2026-07-15T12:00:00.000Z","updated_at":"2026-07-15T12:05:00.000Z","last_active_at":"2026-07-15T12:05:00.000Z","generated_title":"Done work","num_chat_messages":6}
+        {"info":{"id":"\(sessionID)","cwd":"\(cwd)"},"created_at":"\(started)","updated_at":"\(ended)","last_active_at":"\(ended)","generated_title":"Done work","num_chat_messages":6}
         """,
         eventsBody: """
-        {"ts":"2026-07-15T12:00:01.000Z","type":"turn_started"}
-        {"ts":"2026-07-15T12:00:10.000Z","type":"turn_ended","outcome":"completed"}
+        {"ts":"\(started)","type":"turn_started"}
+        {"ts":"\(ended)","type":"turn_ended","outcome":"completed"}
         """,
         updatesBody: """
         {"method":"session/update","params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"修 bug"}}}}
@@ -146,7 +173,6 @@ func grokMonitorMarksDeadProcessWithCompletedTurnAsTodoCandidate() async throws 
     #expect(summary.lastAgentMessage == "已修复")
 
     // 进入 resolver 后应成为待办
-    let now = Date()
     let snapshot = AgentStatusResolver().resolve(
         summaries: [summary],
         completedSessionIDs: [],

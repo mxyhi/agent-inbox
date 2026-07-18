@@ -10,10 +10,11 @@ import OSLog
 /// - `active_sessions.json` + pid 存活校验
 /// - 按需限额读 `updates.jsonl` 取 firstPrompt / lastAgentMessage
 ///
-/// 状态语义(产品锁定):
+/// 状态语义(产品锁定 — 「agent 等你下一步」):
 /// - mid-turn 且 pid 存活 → running
-/// - turn 已 ended 且 pid 仍活(等用户输入) → unknown,不展示
-/// - 进程退出且曾 completed turn → completed(待办候选)
+/// - turn_ended(completed) → completed(待办):进程仍活=等下一步提示;进程已退=会话收尾待确认
+/// - mid-turn 但 pid 已死(崩溃/僵尸) → unknown,不展示
+/// - aborted / 空会话 → 不进待办
 public actor GrokSessionMonitor {
     /// 缓存指纹:summary/events mtime + pid 存活位,任一变化则重解析
     private struct CacheFingerprint: Equatable {
@@ -401,11 +402,9 @@ public actor GrokSessionMonitor {
             lifecycle = processAlive ? .running : .unknown
             taskCompletedAt = nil
         case let .ended(at, outcome):
-            if processAlive {
-                // 等用户输入:不算运行中也不算待办
-                lifecycle = .unknown
-                taskCompletedAt = nil
-            } else if outcome == nil || outcome == "completed" {
+            // 一轮结束 = agent 停住等用户下一步(或会话已退仍待确认)。
+            // 不得要求进程退出:交互式 TUI 常态就是进程活着等输入。
+            if outcome == nil || outcome == "completed" {
                 lifecycle = .completed
                 taskCompletedAt = at ?? lastActive ?? modifiedAt
             } else {

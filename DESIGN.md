@@ -81,7 +81,7 @@ AgentInboxApp
 ## 多源会话(P0,2026-07-15)
 
 - 统一模型:`SessionSummary { provider, sessionID, … }`,`id = provider:sessionID`。
-- Grok 待办语义:进程退出且曾 `turn_ended(completed)` 才进待办;进程存活等输入不展示。
+- Grok 待办语义:`turn_ended(completed)` 即进待办(= agent 等下一步提示);不要求进程退出。同会话多轮:再次 `running` 时解除完成标记。
 - 设计细则见 `docs/design-grok-support.md`。
 
 ## 顺手修掉的 bug
