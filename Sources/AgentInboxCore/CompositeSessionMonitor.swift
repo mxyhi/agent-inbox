@@ -1,21 +1,24 @@
 import Foundation
 import OSLog
 
-/// 组合多源会话监控:并行扫描 Codex + Grok,合并为统一摘要列表。
+/// 组合多源会话监控:并行扫描 Codex + Grok + Claude,合并为统一摘要列表。
 ///
 /// 主线程零 IO;各源 actor 内各自缓存。增量路径把变更路径原样下发,
 /// 源内部自行判断是否与己相关。
 public actor CompositeSessionMonitor {
     public nonisolated let codex: CodexSessionMonitor
     public nonisolated let grok: GrokSessionMonitor
+    public nonisolated let claude: ClaudeSessionMonitor
     private let logger = Logger(subsystem: "agent-inbox", category: "CompositeSessionMonitor")
 
     public init(
         codex: CodexSessionMonitor = CodexSessionMonitor(),
-        grok: GrokSessionMonitor = GrokSessionMonitor()
+        grok: GrokSessionMonitor = GrokSessionMonitor(),
+        claude: ClaudeSessionMonitor = ClaudeSessionMonitor()
     ) {
         self.codex = codex
         self.grok = grok
+        self.claude = claude
     }
 
     /// FSEvents 需要监听的根路径(存在才有意义,由 watcher 再过滤)
@@ -23,6 +26,7 @@ public actor CompositeSessionMonitor {
         [
             codex.sessionsRoot,
             grok.sessionsRoot,
+            claude.sessionsRoot,
             // active_sessions.json 与 sessions 同属 ~/.grok,单独点出文件父目录不够稳时仍扫 sessions;
             // 文件本身变更靠 grok 根附近路径命中;显式加入文件 URL 的父目录
             grok.activeSessionsFile.deletingLastPathComponent()
@@ -33,7 +37,8 @@ public actor CompositeSessionMonitor {
     public func scan() async -> [SessionSummary] {
         async let codexSummaries = codex.scan()
         async let grokSummaries = grok.scan()
-        let merged = await codexSummaries + grokSummaries
+        async let claudeSummaries = claude.scan()
+        let merged = await codexSummaries + grokSummaries + claudeSummaries
         logger.debug(
             "Composite scan merged \(merged.count, privacy: .public) summaries"
         )
@@ -44,7 +49,8 @@ public actor CompositeSessionMonitor {
     public func scanChangedPaths(_ paths: [String]) async -> [SessionSummary] {
         async let codexSummaries = codex.scanChangedPaths(paths)
         async let grokSummaries = grok.scanChangedPaths(paths)
-        let merged = await codexSummaries + grokSummaries
+        async let claudeSummaries = claude.scanChangedPaths(paths)
+        let merged = await codexSummaries + grokSummaries + claudeSummaries
         logger.debug(
             "Composite incremental scan merged \(merged.count, privacy: .public) summaries for \(paths.count, privacy: .public) paths"
         )

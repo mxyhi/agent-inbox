@@ -4,6 +4,8 @@
 **日期**: 2026-07-15
 **范围**: Agent Inbox 从「仅 Codex」扩展为「多 Agent 源」，首批落地 Grok
 
+> 后续状态：Claude Code 会话源已于 2026-08-08 落地，见 `docs/design-claude-support.md`。本文保留 Grok 首批多源改造的历史决策。
+
 ### 已锁定决策
 
 | # | 决策 |

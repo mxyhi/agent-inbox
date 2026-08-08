@@ -1,6 +1,6 @@
 # 会话打开配置
 
-Agent Inbox 支持通过配置自定义如何打开 Codex 会话工作目录。
+Agent Inbox 支持通过配置自定义如何打开 Codex、Grok、Claude 会话工作目录。
 
 ## 功能概述
 
@@ -32,8 +32,9 @@ Agent Inbox 支持通过配置自定义如何打开 Codex 会话工作目录。
 | 变量 | 说明 | 示例值 |
 |------|------|--------|
 | `$session_id` | 会话 ID | `rollout-abc123` |
+| `$provider` | 会话源 | `claude` |
 | `$cwd` | 工作目录路径 | `/Users/example/workspace/my-project` |
-| `$file_path` | rollout 文件完整路径 | `/Users/example/.codex/sessions/rollout-abc123.jsonl` |
+| `$file_path` | transcript/rollout 文件完整路径 | `/Users/example/.claude/projects/project/session-id.jsonl` |
 | `$project_name` | 项目名称（cwd 最后一段） | `my-project` |
 
 ## 示例命令
@@ -56,6 +57,12 @@ open -a iTerm "$cwd"
 ### 打印会话信息（调试用）
 ```bash
 echo "Opening session $session_id at $cwd"
+```
+
+### 恢复 Claude Code 会话
+
+```bash
+claude --resume "$session_id"
 ```
 
 ### 使用自定义脚本

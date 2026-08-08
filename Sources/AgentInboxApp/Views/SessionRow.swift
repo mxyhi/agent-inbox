@@ -388,7 +388,7 @@ private extension String {
 
 // MARK: - 源标签
 
-/// 混排列表里用克制 secondary 标签区分 Codex / Grok
+/// 混排列表里用克制 secondary 标签区分 Codex / Grok / Claude
 struct ProviderTag: View {
     let provider: AgentProvider
 

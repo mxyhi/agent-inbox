@@ -72,6 +72,7 @@ public enum PinMode: String, Codable, CaseIterable, Sendable, Identifiable {
 public enum AgentProvider: String, Codable, CaseIterable, Sendable, Identifiable {
     case codex
     case grok
+    case claude
 
     public var id: String { rawValue }
 
@@ -82,6 +83,8 @@ public enum AgentProvider: String, Codable, CaseIterable, Sendable, Identifiable
             "Codex"
         case .grok:
             "Grok"
+        case .claude:
+            "Claude"
         }
     }
 }
@@ -218,11 +221,11 @@ public struct PromptFilterRule: Codable, Equatable, Sendable, Identifiable {
 }
 
 /// 跨源会话摘要。
-/// Codex:rollout head/tail;Grok:summary.json + events + 进程存活。
+/// Codex:rollout head/tail;Grok:summary.json + events + 进程存活;Claude:transcript head/tail + live 状态。
 public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
     /// 会话源
     public let provider: AgentProvider
-    /// 源原生会话 id(Codex/Grok 均保持原格式,不加前缀)
+    /// 源原生会话 id(所有会话源均保持原格式,不加前缀)
     public let sessionID: String
     public let filePath: String
     /// 会话工作目录,UI 用它展示项目名
@@ -383,7 +386,7 @@ public struct OpenSessionConfig: Codable, Equatable, Sendable {
     /// 支持的模板变量列表（用于 UI 提示）
     public static let supportedVariables: [(name: String, description: String)] = [
         ("$session_id", "源原生会话 ID"),
-        ("$provider", "会话源(codex/grok)"),
+        ("$provider", "会话源(codex/grok/claude)"),
         ("$cwd", "工作目录路径"),
         ("$file_path", "会话文件或目录路径"),
         ("$project_name", "项目名称")
@@ -394,6 +397,7 @@ public struct OpenSessionConfig: Codable, Equatable, Sendable {
         "open -a Terminal \"$cwd\"",
         "code \"$cwd\"",
         "cursor \"$cwd\"",
+        "claude --resume \"$session_id\"",
         "echo \"Opening session $session_id at $cwd\""
     ]
 }

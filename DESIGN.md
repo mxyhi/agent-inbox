@@ -58,7 +58,8 @@ AgentInboxCore
 ├── Models.swift                 # AgentProvider、SessionSummary、AgentSnapshot、SessionIdentity
 ├── CodexSessionMonitor.swift    # actor:扫 ~/.codex/sessions rollout jsonl + mtime 缓存
 ├── GrokSessionMonitor.swift     # actor:扫 ~/.grok/sessions + active_sessions/pid + events tail
-├── CompositeSessionMonitor.swift# 并行合并 Codex+Grok
+├── ClaudeSessionMonitor.swift   # actor:扫 ~/.claude/projects transcript + Claude live 状态
+├── CompositeSessionMonitor.swift# 并行合并 Codex+Grok+Claude
 ├── CodexStatusResolver.swift    # AgentStatusResolver:summaries → AgentSnapshot
 ├── OpenSessionExecutor.swift    # 打开 cwd / 自定义命令($session_id/$provider/…)
 └── StateStore.swift             # SQLite;completed 存 provider:sessionID
@@ -66,12 +67,12 @@ AgentInboxCore
 AgentInboxApp
 ├── AgentInboxApp.swift
 ├── AppViewModel.swift           # Composite 扫描 + 快照发布 + 完成乐观更新
-├── SessionsWatcher.swift        # 多 root FSEvents(Codex+Grok+active_sessions 父目录)
+├── SessionsWatcher.swift        # 多 root FSEvents(Codex+Grok+Claude+active_sessions 父目录)
 ├── FloatingPanelController.swift
 ├── DesignSystem.swift
 └── Views/
     ├── PanelRoot.swift
-    ├── SessionRow.swift         # 混排 + ProviderTag(Codex/Grok)
+    ├── SessionRow.swift         # 混排 + ProviderTag(Codex/Grok/Claude)
     ├── StatusOrb.swift
     ├── TimeText.swift
     ├── VisualEffectBackground.swift
@@ -83,6 +84,14 @@ AgentInboxApp
 - 统一模型:`SessionSummary { provider, sessionID, … }`,`id = provider:sessionID`。
 - Grok 待办语义:`turn_ended(completed)` 即进待办(= agent 等下一步提示);不要求进程退出。同会话多轮:再次 `running` 时解除完成标记。
 - 设计细则见 `docs/design-grok-support.md`。
+
+## Claude Code 会话源(P0,2026-08-08)
+
+- 扫描 `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` 顶层 transcript；嵌套 subagent/tool-results 不独立入箱。
+- `claude agents --json` 补充 live `active`/`idle` 状态；CLI 不可用时退化到 transcript `stop_hook_summary`/`turn_duration`。
+- 一轮停止并等待下一步输入即进入待办，不要求 Claude 进程退出。
+- 不安装 Claude Hook，不修改用户 `~/.claude`；打开会话可用自定义模板 `claude --resume "$session_id"`。
+- 设计细则见 `docs/design-claude-support.md`。
 
 ## 顺手修掉的 bug
 

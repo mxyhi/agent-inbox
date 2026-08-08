@@ -4,7 +4,7 @@ import AgentInboxCore
 import OSLog
 
 /// 主 ViewModel —— 串联「后台扫描 → 快照解析 → UI 发布」
-/// 扫描跑在 CompositeSessionMonitor(Codex+Grok) 上,主线程零文件 IO。
+/// 扫描跑在 CompositeSessionMonitor(Codex+Grok+Claude) 上,主线程零文件 IO。
 @MainActor
 final class AppViewModel: ObservableObject {
     @Published private(set) var snapshot: AgentSnapshot = .empty

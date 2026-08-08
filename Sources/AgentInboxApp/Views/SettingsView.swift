@@ -146,6 +146,12 @@ private struct DataSettingsSection: View {
                         .textSelection(.enabled)
                 }
 
+                LabeledContent("Claude 会话目录") {
+                    Text("~/.claude/projects")
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+
                 LabeledContent("状态存储") {
                     Text("~/Library/Application Support/Agent Inbox")
                         .foregroundStyle(.secondary)
