@@ -188,6 +188,51 @@ func monitorParsesLatestTurnLifecycleEvent() async throws {
 }
 
 @Test
+func monitorParsesExplicitWaitingForUserEvent() async throws {
+    let root = try makeTemporarySessionsRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let body = """
+    {"timestamp":"2026-07-04T17:20:00.000Z","type":"session_meta","payload":{"id":"session-waiting","timestamp":"2026-07-04T17:20:00.000Z","cwd":"/tmp/waiting"}}
+    {"timestamp":"2026-07-04T17:20:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+    {"timestamp":"2026-07-04T17:20:05.000Z","type":"event_msg","payload":{"type":"request_user_input","call_id":"call-1","turn_id":"turn-1","questions":[],"isBlocking":true}}
+    """
+    try writeRollout(
+        root: root,
+        name: "rollout-2026-07-04T17-20-00-waiting.jsonl",
+        body: body,
+        mtimeEpoch: 1_783_185_005
+    )
+
+    let summary = try #require(await CodexSessionMonitor(sessionsRoot: root).scan().first)
+    #expect(summary.lifecycleState == .waitingForUser)
+    #expect(summary.taskCompletedAt == nil)
+    #expect(!summary.isTaskComplete)
+}
+
+@Test
+func monitorDoesNotTreatItemCompletedAsWaitingForUser() async throws {
+    let root = try makeTemporarySessionsRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let body = """
+    {"timestamp":"2026-07-04T17:30:00.000Z","type":"session_meta","payload":{"id":"session-item-complete","timestamp":"2026-07-04T17:30:00.000Z","cwd":"/tmp/item-complete"}}
+    {"timestamp":"2026-07-04T17:30:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+    {"timestamp":"2026-07-04T17:30:05.000Z","type":"event_msg","payload":{"type":"item_completed","item_id":"item-1"}}
+    """
+    try writeRollout(
+        root: root,
+        name: "rollout-2026-07-04T17-30-00-item-complete.jsonl",
+        body: body,
+        mtimeEpoch: 1_783_185_005
+    )
+
+    let summary = try #require(await CodexSessionMonitor(sessionsRoot: root).scan().first)
+    #expect(summary.lifecycleState == .running)
+    #expect(summary.lifecycleState != .waitingForUser)
+}
+
+@Test
 func monitorFallsBackToFileNameWhenHeadIsNotSessionMeta() async throws {
     let root = try makeTemporarySessionsRoot()
     defer { try? FileManager.default.removeItem(at: root) }

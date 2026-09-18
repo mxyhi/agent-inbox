@@ -17,6 +17,16 @@ struct MenuContentView: View {
 
         Divider()
 
+        // 等待处理区:打开会话后完成选择或审批
+        if viewModel.snapshot.hasWaiting {
+            ForEach(viewModel.snapshot.waiting.prefix(5)) { session in
+                Button("处理「\(session.projectName)」") {
+                    viewModel.openSession(id: session.id)
+                }
+            }
+            Divider()
+        }
+
         // 待办操作区:逐个完成 + 批量完成
         if viewModel.snapshot.hasTodo {
             ForEach(viewModel.snapshot.todos.prefix(5)) { session in

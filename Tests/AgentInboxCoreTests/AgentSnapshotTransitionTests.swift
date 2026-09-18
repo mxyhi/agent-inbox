@@ -38,6 +38,16 @@ func runningSessionTransitioningToTodoIsNewTodo() {
 }
 
 @Test
+func runningSessionTransitioningToWaitingIsNewWaiting() {
+    let running = makeTransitionSummary(id: "session", lifecycleState: .running)
+    let waiting = makeTransitionSummary(id: "session", lifecycleState: .waitingForUser)
+    let previous = AgentSnapshot(todos: [], running: [running], hasCompletedHistory: false)
+    let next = AgentSnapshot(waiting: [waiting], todos: [], running: [], hasCompletedHistory: false)
+
+    #expect(next.newWaiting(comparedTo: previous).map(\.id) == ["codex:session"])
+}
+
+@Test
 func todoDiscoveredWithoutObservedRunningStateIsNotNewTodo() {
     let todo = makeTransitionSummary(
         id: "existing",

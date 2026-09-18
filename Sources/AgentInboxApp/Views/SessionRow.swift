@@ -219,6 +219,37 @@ struct RunningRow: View {
     }
 }
 
+// MARK: - 等待用户处理行
+
+/// 等待行 —— Codex 已暂停在选择、审批或输入请求上；打开会话后由用户继续处理。
+struct WaitingRow: View {
+    let session: SessionSummary
+    let onOpen: () -> Void
+
+    var body: some View {
+        HStack(spacing: DS.Metrics.rowSpacing) {
+            StatusOrb(kind: .waiting)
+
+            Text(session.projectName)
+                .font(DS.Fonts.rowTitle)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            ProviderTag(provider: session.provider)
+
+            Spacer(minLength: 12)
+
+            RelativeTimeText(date: session.modifiedAt)
+            OpenButton(action: onOpen)
+        }
+        .padding(.vertical, DS.Metrics.rowPaddingV)
+        .padding(.horizontal, DS.Metrics.rowPaddingH)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("等待你处理:\(session.projectName)")
+        .accessibilityAction(named: "打开会话", onOpen)
+    }
+}
+
 // MARK: - 打开按钮(焦点卡次动作)
 
 /// 「↗」—— 纯图标按钮,hover 才浮出淡底,跳到会话工作目录。

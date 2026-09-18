@@ -19,7 +19,7 @@ public struct AgentStatusResolver: Sendable {
         self.todoRetentionInterval = todoRetentionInterval
     }
 
-    /// 把原始扫描结果解析为 UI 快照:待办优先、运行中次之
+    /// 把原始扫描结果解析为 UI 快照:等待用户优先、待办其次、运行中最后
     /// - running:lifecycle 是 running,且 staleRunningInterval 内有写入,最近活跃在前
     /// - todos:lifecycle 是 completed、尚未确认、完成时间在 todoRetentionInterval 内,最新完成在前
     /// - hasCompletedHistory:用户历史上是否手动确认过任务
@@ -30,6 +30,13 @@ public struct AgentStatusResolver: Sendable {
         trackingStartedAt: Date = .distantPast,
         now: Date = Date()
     ) -> AgentSnapshot {
+        let waiting = summaries
+            .filter {
+                $0.lifecycleState == .waitingForUser
+                    && now.timeIntervalSince($0.modifiedAt) <= todoRetentionInterval
+            }
+            .sorted { $0.modifiedAt > $1.modifiedAt }
+
         // 运行中:lifecycle 仍是 running,并且最近仍有写入
         let running = summaries
             .filter { $0.lifecycleState == .running && now.timeIntervalSince($0.modifiedAt) <= staleRunningInterval }
@@ -48,6 +55,7 @@ public struct AgentStatusResolver: Sendable {
             .sorted { ($0.taskCompletedAt ?? .distantPast) > ($1.taskCompletedAt ?? .distantPast) }
 
         return AgentSnapshot(
+            waiting: waiting,
             todos: todos,
             running: running,
             hasCompletedHistory: !completedSessionIDs.isEmpty

@@ -2,6 +2,7 @@ import SwiftUI
 
 /// 状态光点 —— V4 用动效取代文字标签表达状态:
 /// - 运行中:蓝点呼吸(缩放 + 光晕,周期 1.8s)
+/// - 等待你处理:黄色静点
 /// - 待办:橙点 + 涟漪扩散(每 2.5s 一圈,召唤注意力)
 /// - 空闲:静止灰点
 /// 遵守「减少动画」偏好:reduceMotion 时全部退化为静止实心点。
@@ -9,6 +10,7 @@ struct StatusOrb: View {
     enum Kind {
         case running
         case todo
+        case waiting
         case idle
     }
 
@@ -23,6 +25,8 @@ struct StatusOrb: View {
                 runningOrb
             case .todo:
                 todoOrb
+            case .waiting:
+                staticDot(DS.Colors.waiting)
             case .idle:
                 staticDot(DS.Colors.idle)
             }

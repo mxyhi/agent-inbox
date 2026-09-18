@@ -107,6 +107,7 @@ final class AppViewModel: ObservableObject {
 
         persistedState.completedSessionIDs.insert(id)
         snapshot = AgentSnapshot(
+            waiting: snapshot.waiting,
             todos: snapshot.todos.filter { $0.id != id },
             running: snapshot.running,
             hasCompletedHistory: true
@@ -120,7 +121,8 @@ final class AppViewModel: ObservableObject {
 
     /// 打开会话工作目录 —— 根据配置使用不同方式打开
     func openSession(id: String) {
-        guard let session = snapshot.todos.first(where: { $0.id == id })
+        guard let session = snapshot.waiting.first(where: { $0.id == id })
+            ?? snapshot.todos.first(where: { $0.id == id })
             ?? snapshot.running.first(where: { $0.id == id }) else {
             logger.warning("openSession 未找到会话: \(id, privacy: .public)")
             notificationController.show(title: "打开失败", message: "未找到会话 \(id)")
@@ -145,6 +147,7 @@ final class AppViewModel: ObservableObject {
         }
         let count = snapshot.todos.count
         snapshot = AgentSnapshot(
+            waiting: snapshot.waiting,
             todos: [],
             running: snapshot.running,
             hasCompletedHistory: true
@@ -324,7 +327,9 @@ final class AppViewModel: ObservableObject {
 
     /// 菜单栏图标 —— 待办 > 运行中 > 完成历史 > 空闲
     var menuBarSystemImage: String {
-        if snapshot.hasTodo {
+        if snapshot.hasWaiting {
+            "questionmark.circle.fill"
+        } else if snapshot.hasTodo {
             "exclamationmark.circle.fill"
         } else if snapshot.isActive {
             "bolt.circle.fill"
@@ -338,6 +343,9 @@ final class AppViewModel: ObservableObject {
     /// 菜单栏摘要行,如 "2 个待办 · 1 个运行中"
     var menuSummary: String {
         var parts: [String] = []
+        if snapshot.hasWaiting {
+            parts.append("\(snapshot.waiting.count) 个等待你处理")
+        }
         if snapshot.hasTodo {
             parts.append("\(snapshot.todos.count) 个待办")
         }
@@ -395,9 +403,11 @@ final class AppViewModel: ObservableObject {
 
         if next != snapshot {
             let newTodos = next.newTodos(comparedTo: snapshot)
-            logger.info("快照变化: 待办 \(next.todos.count) · 运行 \(next.running.count)")
+            let newWaiting = next.newWaiting(comparedTo: snapshot)
+            logger.info("快照变化: 等待你处理 \(next.waiting.count) · 待办 \(next.todos.count) · 运行 \(next.running.count)")
             snapshot = next
             notifyNewTodos(newTodos)
+            notifyWaitingForUser(newWaiting)
         }
     }
 
@@ -439,6 +449,23 @@ final class AppViewModel: ObservableObject {
         logger.info("新待办通知已请求: count=\(todos.count)")
     }
 
+    private func notifyWaitingForUser(_ sessions: [SessionSummary]) {
+        guard !sessions.isEmpty else { return }
+
+        let title = sessions.count == 1 ? "等待你处理" : "有 \(sessions.count) 个会话等待你处理"
+        let message = if let session = sessions.first, sessions.count == 1 {
+            "\(session.projectName) 的 Codex 正在等待选择或审批"
+        } else {
+            "Codex 正在等待你的选择或审批"
+        }
+        notificationController.show(
+            title: title,
+            message: message,
+            threadIdentifier: "agent-inbox-waiting"
+        )
+        logger.info("等待你处理通知已请求: count=\(sessions.count)")
+    }
+
     private func filterCurrentSnapshot() {
         let filteredTodos = snapshot.todos.filter { session in
             !persistedState.promptFilterRules.contains { $0.matches(session) }
@@ -446,6 +473,7 @@ final class AppViewModel: ObservableObject {
         guard filteredTodos.count != snapshot.todos.count else { return }
 
         snapshot = AgentSnapshot(
+            waiting: snapshot.waiting,
             todos: filteredTodos,
             running: snapshot.running,
             hasCompletedHistory: snapshot.hasCompletedHistory

@@ -82,6 +82,24 @@ func todoOnlyPinModeFloatsOnlyForTodos() {
 }
 
 @Test
+func waitingForUserAlsoFloatsInActionModes() {
+    let now = Date(timeIntervalSince1970: 10_000)
+    let waiting = makeSummary(
+        id: "waiting",
+        modifiedAt: now.addingTimeInterval(-5),
+        lifecycleState: .waitingForUser
+    )
+    let snapshot = AgentStatusResolver().resolve(
+        summaries: [waiting],
+        completedSessionIDs: [],
+        now: now
+    )
+
+    #expect(PinMode.activeOrTodo.shouldFloat(for: snapshot))
+    #expect(PinMode.todoOnly.shouldFloat(for: snapshot))
+}
+
+@Test
 func panelPresentationFollowsConfiguredPinMode() {
     let now = Date(timeIntervalSince1970: 10_000)
     let running = makeSummary(id: "running", modifiedAt: now.addingTimeInterval(-5))
@@ -141,6 +159,27 @@ func runningSessionsAreAllKeptAndSortedByRecency() {
     #expect(snapshot.todos.isEmpty)
     #expect(snapshot.isActive)
     #expect(!snapshot.hasTodo)
+}
+
+@Test
+func waitingSessionsAreExposedSeparatelyFromTodosAndRunning() {
+    let now = Date(timeIntervalSince1970: 10_000)
+    let waiting = makeSummary(
+        id: "waiting",
+        modifiedAt: now.addingTimeInterval(-5),
+        lifecycleState: .waitingForUser
+    )
+    let snapshot = AgentStatusResolver().resolve(
+        summaries: [waiting],
+        completedSessionIDs: [],
+        now: now
+    )
+
+    #expect(snapshot.waiting.map(\.id) == ["codex:waiting"])
+    #expect(snapshot.todos.isEmpty)
+    #expect(snapshot.running.isEmpty)
+    #expect(snapshot.hasWaiting)
+    #expect(snapshot.hasActionRequired)
 }
 
 @Test

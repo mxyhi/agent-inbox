@@ -29,6 +29,11 @@ struct PanelRoot: View {
                     announce("有新的 Agent 待办")
                 }
             }
+            .onChange(of: viewModel.snapshot.waiting.count) { oldCount, newCount in
+                if newCount > oldCount {
+                    announce("有 Agent 等待你处理")
+                }
+            }
     }
 
     // MARK: - 内容分发
@@ -147,6 +152,20 @@ struct SessionList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             // 待办区:新完成的排前;首个 = 焦点卡(问/答 + 行动),其余 = 单行素行
+            ForEach(snapshot.waiting.prefix(Self.sectionLimit)) { session in
+                WaitingRow(session: session, onOpen: { onOpen(session.id) })
+            }
+
+            if snapshot.waiting.count > Self.sectionLimit {
+                OverflowLabel(text: "还有 \(snapshot.waiting.count - Self.sectionLimit) 个等待你处理")
+            }
+
+            if snapshot.hasWaiting && (snapshot.hasTodo || snapshot.isActive) {
+                Divider()
+                    .padding(.horizontal, DS.Metrics.rowPaddingH)
+                    .padding(.vertical, 2)
+            }
+
             ForEach(Array(snapshot.todos.prefix(Self.sectionLimit).enumerated()), id: \.element.id) { index, session in
                 if index == 0 {
                     FocusTodoCard(

@@ -56,9 +56,9 @@ public enum PinMode: String, Codable, CaseIterable, Sendable, Identifiable {
         case .alwaysOnTop:
             true
         case .activeOrTodo:
-            snapshot.isActive || snapshot.hasTodo
+            snapshot.isActive || snapshot.hasActionRequired
         case .todoOnly:
-            snapshot.hasTodo
+            snapshot.hasActionRequired
         }
     }
 
@@ -117,6 +117,7 @@ public enum SessionIdentity {
 /// Codex 来自 rollout 尾部 lifecycle event;Grok 由 events.jsonl + 进程存活合成。
 public enum TurnLifecycleState: String, Codable, Equatable, Sendable {
     case running
+    case waitingForUser
     case completed
     case aborted
     case rolledBack
@@ -287,6 +288,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
 
 /// 全量状态快照 —— V4 用「待办优先的列表」取代单焦点状态机
 public struct AgentSnapshot: Equatable, Sendable {
+    /// 正在等待用户选择、审批或输入的会话。
+    public let waiting: [SessionSummary]
     /// 等待确认的会话,新完成的排前面
     public let todos: [SessionSummary]
     /// 运行中的会话,最近活跃的排前面
@@ -295,10 +298,12 @@ public struct AgentSnapshot: Equatable, Sendable {
     public let hasCompletedHistory: Bool
 
     public init(
+        waiting: [SessionSummary] = [],
         todos: [SessionSummary],
         running: [SessionSummary],
         hasCompletedHistory: Bool
     ) {
+        self.waiting = waiting
         self.todos = todos
         self.running = running
         self.hasCompletedHistory = hasCompletedHistory
@@ -306,8 +311,10 @@ public struct AgentSnapshot: Equatable, Sendable {
 
     public static let empty = AgentSnapshot(todos: [], running: [], hasCompletedHistory: false)
 
-    public var isEmpty: Bool { todos.isEmpty && running.isEmpty }
+    public var isEmpty: Bool { waiting.isEmpty && todos.isEmpty && running.isEmpty }
     public var hasTodo: Bool { !todos.isEmpty }
+    public var hasWaiting: Bool { !waiting.isEmpty }
+    public var hasActionRequired: Bool { hasWaiting || hasTodo }
     public var isActive: Bool { !running.isEmpty }
 
     /// 只把已观察为运行中、随后进入待办的同一会话视为新待办。
@@ -315,6 +322,12 @@ public struct AgentSnapshot: Equatable, Sendable {
     public func newTodos(comparedTo previous: AgentSnapshot) -> [SessionSummary] {
         let previouslyRunningIDs = Set(previous.running.map(\.id))
         return todos.filter { previouslyRunningIDs.contains($0.id) }
+    }
+
+    /// 只把已观察为运行中、随后进入等待用户状态的同一会话视为新等待。
+    public func newWaiting(comparedTo previous: AgentSnapshot) -> [SessionSummary] {
+        let previouslyRunningIDs = Set(previous.running.map(\.id))
+        return waiting.filter { previouslyRunningIDs.contains($0.id) }
     }
 }
 

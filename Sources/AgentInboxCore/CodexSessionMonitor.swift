@@ -400,6 +400,11 @@ public actor CodexSessionMonitor {
                     || line.contains("\"turn_complete\"")
                     || line.contains("\"turn_aborted\"")
                     || line.contains("\"thread_rolled_back\"")
+                    || line.contains("\"exec_approval_request\"")
+                    || line.contains("\"apply_patch_approval_request\"")
+                    || line.contains("\"request_permissions\"")
+                    || line.contains("\"request_user_input\"")
+                    || line.contains("\"elicitation_request\"")
             else { continue }
             guard let parsed = try? decoder.decode(RolloutLine.self, from: Data(line.utf8)),
                   parsed.type == "event_msg",
@@ -410,6 +415,8 @@ public actor CodexSessionMonitor {
             switch eventType {
             case "task_started", "turn_started":
                 return TailInfo(lifecycleState: .running)
+            case "exec_approval_request", "apply_patch_approval_request", "request_permissions", "request_user_input", "elicitation_request":
+                return TailInfo(lifecycleState: .waitingForUser)
             case "task_complete", "turn_complete":
                 // 完成时间优先取事件外层 timestamp(真实数据 payload 内没有 completed_at 字段);
                 // timestamp 缺失或解析失败时 fallback 到文件 mtime

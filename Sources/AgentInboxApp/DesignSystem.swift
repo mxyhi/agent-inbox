@@ -12,6 +12,8 @@ enum DS {
         static let running = Color.blue
         /// 待办 —— 系统橙
         static let todo = Color.orange
+        /// 等待用户选择/审批/输入 —— 系统黄
+        static let waiting = Color.yellow
         /// 完成 —— 系统绿
         static let done = Color.green
         /// 空闲点 —— 弱化的次要色
