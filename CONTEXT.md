@@ -17,8 +17,8 @@ _Avoid_: 普通任务、历史记录
 _Avoid_: 新任务、新会话
 
 **等待你处理**:
-Codex 当前一轮尚未结束，但已经发出选择、审批、权限或输入请求，暂停等待用户处理。它是独立于「待办」的实时状态；`item_completed` 只表示单个 item 完成，不触发此状态。
-_Avoid_: 把 item_completed 当作整轮完成或等待用户、把等待审批误报为待办
+Codex 当前一轮尚未结束，但已经发出选择、审批、权限或输入请求，暂停等待用户处理。异步追问记录为 `item_completed.item` 的 `AgentMessage`，且 `delivery=async`、`questions` 非空；即使随后出现 `task_complete`，未回答问题仍保持此状态。普通 `item_completed` 只表示单个 item 完成，不触发此状态。
+_Avoid_: 把普通 item_completed 当作整轮完成或等待用户、把等待审批误报为待办
 
 **会话源**:
 会话数据的来源种类（Codex、Grok、Claude Code）。列表可混排多源，用标签区分。

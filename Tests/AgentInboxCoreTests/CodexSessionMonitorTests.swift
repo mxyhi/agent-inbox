@@ -211,6 +211,73 @@ func monitorParsesExplicitWaitingForUserEvent() async throws {
 }
 
 @Test
+func monitorTreatsUnansweredAsyncQuestionAsWaitingAfterTaskComplete() async throws {
+    let root = try makeTemporarySessionsRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let body = """
+    {"timestamp":"2026-07-04T17:25:00.000Z","type":"session_meta","payload":{"id":"session-async-question","timestamp":"2026-07-04T17:25:00.000Z","cwd":"/tmp/async-question"}}
+    {"timestamp":"2026-07-04T17:25:01.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"请确认方案"}}
+    {"timestamp":"2026-07-04T17:25:02.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","delivery":"async","questions":[{"title":"是否继续？","options":["继续","停止"]}]}}}
+    """
+    try writeRollout(
+        root: root,
+        name: "rollout-2026-07-04T17-25-00-async-question.jsonl",
+        body: body,
+        mtimeEpoch: 1_783_185_005
+    )
+
+    let summary = try #require(await CodexSessionMonitor(sessionsRoot: root).scan().first)
+    #expect(summary.lifecycleState == .waitingForUser)
+    #expect(summary.taskCompletedAt != nil)
+    #expect(summary.lastAgentMessage == "请确认方案")
+}
+
+@Test
+func monitorClearsOnlyAnsweredAsyncQuestion() async throws {
+    let root = try makeTemporarySessionsRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let body = """
+    {"timestamp":"2026-07-04T17:26:00.000Z","type":"session_meta","payload":{"id":"session-multiple-questions","timestamp":"2026-07-04T17:26:00.000Z","cwd":"/tmp/multiple-questions"}}
+    {"timestamp":"2026-07-04T17:26:01.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","delivery":"async","questions":[{"title":"第一个问题"},{"title":"第二个问题"}]}}}
+    {"timestamp":"2026-07-04T17:26:02.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"text","text":"> 第一个问题\\n\\n第一个答案"}]}}}
+    """
+    try writeRollout(
+        root: root,
+        name: "rollout-2026-07-04T17-26-00-multiple-questions.jsonl",
+        body: body,
+        mtimeEpoch: 1_783_185_005
+    )
+
+    let summary = try #require(await CodexSessionMonitor(sessionsRoot: root).scan().first)
+    #expect(summary.lifecycleState == .waitingForUser)
+}
+
+@Test
+func monitorRestoresCompletionAfterAsyncQuestionAnswer() async throws {
+    let root = try makeTemporarySessionsRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let body = """
+    {"timestamp":"2026-07-04T17:27:00.000Z","type":"session_meta","payload":{"id":"session-answered-question","timestamp":"2026-07-04T17:27:00.000Z","cwd":"/tmp/answered-question"}}
+    {"timestamp":"2026-07-04T17:27:01.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"已暂停"}}
+    {"timestamp":"2026-07-04T17:27:02.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","delivery":"async","questions":[{"title":"继续吗？"}]}}}
+    {"timestamp":"2026-07-04T17:27:03.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"text","text":"> 继续吗？\\n\\n继续"}]}}}
+    """
+    try writeRollout(
+        root: root,
+        name: "rollout-2026-07-04T17-27-00-answered-question.jsonl",
+        body: body,
+        mtimeEpoch: 1_783_185_005
+    )
+
+    let summary = try #require(await CodexSessionMonitor(sessionsRoot: root).scan().first)
+    #expect(summary.lifecycleState == .completed)
+    #expect(summary.taskCompletedAt != nil)
+}
+
+@Test
 func monitorDoesNotTreatItemCompletedAsWaitingForUser() async throws {
     let root = try makeTemporarySessionsRoot()
     defer { try? FileManager.default.removeItem(at: root) }

@@ -21,7 +21,7 @@ public actor CodexSessionMonitor {
         let payload: RolloutPayload?
     }
 
-    /// rollout 行 payload:session_meta / task_complete / user_message 三类字段的并集
+    /// rollout 行 payload:session_meta / lifecycle / item_completed 三类字段的并集。
     private struct RolloutPayload: Decodable {
         /// session_meta:会话 ID(真实数据 id 与 session_id 并存,优先 id)
         let id: String?
@@ -36,6 +36,8 @@ public actor CodexSessionMonitor {
         let lastAgentMessage: String?
         /// user_message:用户输入原文(可能是几 KB 的终端粘贴,含多行/ASCII art),存前需清洗截断
         let message: String?
+        /// item_completed:用户消息或异步追问的 item
+        let item: RolloutItem?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -45,7 +47,25 @@ public actor CodexSessionMonitor {
             case timestamp
             case lastAgentMessage = "last_agent_message"
             case message
+            case item
         }
+    }
+
+    /// Codex item_completed.item 的最小解码模型。
+    private struct RolloutItem: Decodable {
+        let type: String?
+        let delivery: String?
+        let questions: [AsyncQuestion]?
+        let content: [RolloutContent]?
+    }
+
+    private struct AsyncQuestion: Decodable {
+        let title: String?
+    }
+
+    private struct RolloutContent: Decodable {
+        let type: String?
+        let text: String?
     }
 
     /// head 解析结果:session_meta 三元组 + 首个用户提示词
@@ -62,6 +82,7 @@ public actor CodexSessionMonitor {
         var lifecycleState: TurnLifecycleState = .unknown
         var taskCompletedAt: Date?
         var lastAgentMessage: String?
+        var unansweredQuestions: [String] = []
     }
 
     public nonisolated let sessionsRoot: URL
@@ -361,7 +382,9 @@ public actor CodexSessionMonitor {
         return info
     }
 
-    /// 读文件尾 tailByteLimit 字节,从后向前找最近 lifecycle event(一个文件可能承载多轮任务)
+    /// 读文件尾 tailByteLimit 字节,按时间顺序归并 lifecycle 与异步追问。
+    /// Codex 的 request_user_input_async 会先写 item_completed(AgentMessage,
+    /// delivery=async, questions),随后可能写 task_complete;未回答问题必须覆盖完成状态。
     private func parseTail(handle: FileHandle, decoder: JSONDecoder, url: URL, modifiedAt: Date) -> TailInfo {
         guard let size = try? handle.seekToEnd() else {
             logger.warning("Failed to determine rollout size: \(url.path, privacy: .public)")
@@ -390,9 +413,11 @@ public actor CodexSessionMonitor {
             return TailInfo()
         }
 
-        // 从后向前找第一个 lifecycle 命中,即当前 turn 的最新官方状态。
-        for line in text.split(separator: "\n", omittingEmptySubsequences: true).reversed() {
-            // 子串预筛:绝大多数行与 lifecycle 无关,避免逐行 JSON 解码的开销
+        var tail = TailInfo()
+
+        // 正序扫描才能同时处理「先提问、后完成」和「用户回答后恢复」两种顺序。
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            // 子串预筛:绝大多数行与 lifecycle/item 无关,避免逐行 JSON 解码的开销
             guard
                 line.contains("\"task_started\"")
                     || line.contains("\"turn_started\"")
@@ -405,37 +430,82 @@ public actor CodexSessionMonitor {
                     || line.contains("\"request_permissions\"")
                     || line.contains("\"request_user_input\"")
                     || line.contains("\"elicitation_request\"")
+                    || line.contains("\"questions\"")
+                    || line.contains("\"UserMessage\"")
+                    || line.contains("\"user_message\"")
             else { continue }
-            guard let parsed = try? decoder.decode(RolloutLine.self, from: Data(line.utf8)),
-                  parsed.type == "event_msg",
-                  let eventType = parsed.payload?.type else {
+            guard let parsed = try? decoder.decode(RolloutLine.self, from: Data(line.utf8)) else {
                 continue
             }
 
-            switch eventType {
-            case "task_started", "turn_started":
-                return TailInfo(lifecycleState: .running)
-            case "exec_approval_request", "apply_patch_approval_request", "request_permissions", "request_user_input", "elicitation_request":
-                return TailInfo(lifecycleState: .waitingForUser)
-            case "task_complete", "turn_complete":
-                // 完成时间优先取事件外层 timestamp(真实数据 payload 内没有 completed_at 字段);
-                // timestamp 缺失或解析失败时 fallback 到文件 mtime
-                return TailInfo(
-                    lifecycleState: .completed,
-                    taskCompletedAt: parsed.timestamp.flatMap { parseISO8601($0) } ?? modifiedAt,
-                    lastAgentMessage: parsed.payload?.lastAgentMessage
-                )
-            case "turn_aborted":
-                return TailInfo(lifecycleState: .aborted)
-            case "thread_rolled_back":
-                return TailInfo(lifecycleState: .rolledBack)
-            default:
-                continue
+            guard let payload = parsed.payload else { continue }
+
+            if let eventType = payload.type, parsed.type == "event_msg" {
+                switch eventType {
+                case "task_started", "turn_started":
+                    tail.lifecycleState = .running
+                    tail.taskCompletedAt = nil
+                    tail.lastAgentMessage = nil
+                case "exec_approval_request", "apply_patch_approval_request", "request_permissions", "request_user_input", "elicitation_request":
+                    tail.lifecycleState = .waitingForUser
+                case "task_complete", "turn_complete":
+                    // 完成时间优先取事件外层 timestamp(真实数据 payload 内没有 completed_at 字段);
+                    // timestamp 缺失或解析失败时 fallback 到文件 mtime
+                    tail.lifecycleState = .completed
+                    tail.taskCompletedAt = parsed.timestamp.flatMap { parseISO8601($0) } ?? modifiedAt
+                    tail.lastAgentMessage = payload.lastAgentMessage
+                case "turn_aborted":
+                    tail.lifecycleState = .aborted
+                    tail.taskCompletedAt = nil
+                    tail.lastAgentMessage = nil
+                case "thread_rolled_back":
+                    tail.lifecycleState = .rolledBack
+                    tail.taskCompletedAt = nil
+                    tail.lastAgentMessage = nil
+                default:
+                    break
+                }
+            }
+
+            guard let item = payload.item else { continue }
+            if item.type == "AgentMessage", item.delivery == "async" {
+                let titles = item.questions?.compactMap(\.title).filter { !$0.isEmpty } ?? []
+                for title in titles where !tail.unansweredQuestions.contains(title) {
+                    tail.unansweredQuestions.append(title)
+                    logger.debug("Codex async question pending in (url.path, privacy: .public): (title, privacy: .public)")
+                }
+            } else if item.type == "UserMessage" {
+                let message = item.content?
+                    .compactMap(\.text)
+                    .joined(separator: "\n")
+                consumeUserMessage(message, unansweredQuestions: &tail.unansweredQuestions)
             }
         }
 
-        // 尾部可能只有普通 message/tool 事件;保留旧 fresh-mtime 运行候选,避免长任务漏报。
-        return TailInfo(lifecycleState: .running)
+        if !tail.unansweredQuestions.isEmpty {
+            tail.lifecycleState = .waitingForUser
+        } else if tail.lifecycleState == .unknown {
+            // 尾部可能只有普通 message/tool 事件;保留旧 fresh-mtime 运行候选,避免长任务漏报。
+            tail.lifecycleState = .running
+        }
+        return tail
+    }
+
+    /// 处理 Codex TUI 回答异步追问时写入的 UserMessage。
+    /// 形如「> 问题标题\n\n用户回答」只消费对应问题;普通用户消息消费全部旧问题。
+    private func consumeUserMessage(_ message: String?, unansweredQuestions: inout [String]) {
+        guard !unansweredQuestions.isEmpty else { return }
+        guard let message, !message.isEmpty else { return }
+
+        if message.hasPrefix("> "), let separator = message.range(of: "\n\n") {
+            let title = String(message[message.index(message.startIndex, offsetBy: 2)..<separator.lowerBound])
+            if let index = unansweredQuestions.firstIndex(of: title) {
+                unansweredQuestions.remove(at: index)
+                return
+            }
+        }
+
+        unansweredQuestions.removeAll()
     }
 
     // MARK: - 首提示词清洗
