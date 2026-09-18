@@ -2,7 +2,7 @@ import AgentInboxCore
 import Foundation
 import ObjectiveC
 
-/// 进程内 URLSession 代理桥。Sparkle 2.9.4 没有公开 sessionConfiguration delegate,
+/// 进程内 URLSession 代理桥。Sparkle 2.10.0 没有公开 sessionConfiguration delegate,
 /// 因此在应用进程里替换默认 URLSessionConfiguration,让 appcast 与更新包请求都能读取代理配置。
 final class NetworkProxySessionBridge: @unchecked Sendable {
     static let shared = NetworkProxySessionBridge()
