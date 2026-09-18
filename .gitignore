@@ -15,6 +15,7 @@ DerivedData/
 task_plan.md
 findings.md
 progress.md
+.planning/.active_plan
 
 # macOS
 .DS_Store

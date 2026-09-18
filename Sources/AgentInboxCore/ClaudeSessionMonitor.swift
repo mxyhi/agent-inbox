@@ -120,7 +120,8 @@ public actor ClaudeSessionMonitor {
     private let logger = Logger(subsystem: "agent-inbox", category: "ClaudeSessionMonitor")
     private let fractionalFormatter: ISO8601DateFormatter
     private let plainFormatter: ISO8601DateFormatter
-    private let liveStatusCacheInterval: TimeInterval = 2
+    // Claude CLI 状态查询只用于补齐运行态；30 秒足够保持实时感，同时避免频繁启动子进程。
+    private let liveStatusCacheInterval: TimeInterval = 30
 
     private var cache: [String: CachedEntry] = [:]
     private var liveStatusCache: [String: LiveStatus] = [:]
