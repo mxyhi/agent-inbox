@@ -151,7 +151,7 @@ struct SessionList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            // 待办区:新完成的排前;首个 = 焦点卡(问/答 + 行动),其余 = 单行素行
+            // 等待区:橙点涟漪 + 橙底,视觉与待办同级;动作是打开会话
             ForEach(snapshot.waiting.prefix(Self.sectionLimit)) { session in
                 WaitingRow(session: session, onOpen: { onOpen(session.id) })
             }

@@ -3,17 +3,15 @@ import SwiftUI
 
 /// V4 设计系统 —— 单文件集中定义色彩/字体/间距/动画
 /// 设计语言:系统原生材质 + 单色 vibrancy 文本,彩色只出现在状态光点与完成按钮上;
-/// 状态不用文字标签,由光点动效表达(运行=呼吸、待办=涟漪)。
+/// 状态不用文字标签,由光点动效表达(运行=呼吸、等待/待办=涟漪)。
 enum DS {
     // MARK: - 色彩
 
     enum Colors {
         /// 运行中 —— 系统蓝(跟随明暗模式)
         static let running = Color.blue
-        /// 待办 —— 系统橙
+        /// 待办 / 等待你处理 —— 系统橙(两种都要用户处理,共用注意力色)
         static let todo = Color.orange
-        /// 等待用户选择/审批/输入 —— 系统黄
-        static let waiting = Color.yellow
         /// 完成 —— 系统绿
         static let done = Color.green
         /// 空闲点 —— 弱化的次要色

@@ -222,6 +222,7 @@ struct RunningRow: View {
 // MARK: - 等待用户处理行
 
 /// 等待行 —— Codex 已暂停在选择、审批或输入请求上；打开会话后由用户继续处理。
+/// 视觉沿用待办注意力语言(橙点涟漪 + 橙底),动作仍是打开而不是完成。
 struct WaitingRow: View {
     let session: SessionSummary
     let onOpen: () -> Void
@@ -244,6 +245,14 @@ struct WaitingRow: View {
         }
         .padding(.vertical, DS.Metrics.rowPaddingV)
         .padding(.horizontal, DS.Metrics.rowPaddingH)
+        .background(
+            RoundedRectangle(cornerRadius: DS.Metrics.focusCardRadius, style: .continuous)
+                .fill(DS.Colors.focusCardFill)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.Metrics.focusCardRadius, style: .continuous)
+                .strokeBorder(DS.Colors.focusCardStroke, lineWidth: 0.5)
+        )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("等待你处理:\(session.projectName)")
         .accessibilityAction(named: "打开会话", onOpen)
@@ -405,6 +414,8 @@ private extension String {
 
 #Preview("会话列表") {
     VStack(alignment: .leading, spacing: 2) {
+        WaitingRow(session: .mockWaiting, onOpen: {})
+        Divider()
         FocusTodoCard(session: .mockTodo, onOpen: {}, onComplete: {}, onCreateFilter: {})
             .padding(.bottom, DS.Metrics.focusCardGap)
         TodoRow(session: .mockTodo2, onComplete: {}, onCreateFilter: {})
@@ -465,6 +476,21 @@ extension SessionSummary {
             taskCompletedAt: Date().addingTimeInterval(-3600),
             lastAgentMessage: "完成了依赖升级。",
             firstPrompt: "把所有依赖升级到最新"
+        )
+    }
+
+    static var mockWaiting: SessionSummary {
+        SessionSummary(
+            provider: .codex,
+            sessionID: "waiting-1",
+            filePath: "/tmp/rollout-waiting.jsonl",
+            cwd: "/Users/example/workspace/new-api-pool",
+            startedAt: Date().addingTimeInterval(-90),
+            modifiedAt: Date(),
+            lifecycleState: .waitingForUser,
+            taskCompletedAt: nil,
+            lastAgentMessage: "需要你选择接下来的处理方式。",
+            firstPrompt: "继续处理号池同步"
         )
     }
 
