@@ -114,7 +114,7 @@ public enum SessionIdentity {
 }
 
 /// Turn 生命周期状态(跨源统一)。
-/// Codex 来自 rollout 尾部 lifecycle event;Grok 由 events.jsonl + 进程存活合成。
+/// Codex 来自 rollout 顺序归并的 lifecycle event;Grok 由 events.jsonl + 进程存活合成。
 public enum TurnLifecycleState: String, Codable, Equatable, Sendable {
     case running
     case waitingForUser
@@ -222,7 +222,7 @@ public struct PromptFilterRule: Codable, Equatable, Sendable, Identifiable {
 }
 
 /// 跨源会话摘要。
-/// Codex:rollout head/tail;Grok:summary.json + events + 进程存活;Claude:transcript head/tail + live 状态。
+/// Codex:rollout 元信息与增量状态;Grok:summary.json + events + 进程存活;Claude:transcript head/tail + live 状态。
 public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
     /// 会话源
     public let provider: AgentProvider
@@ -243,6 +243,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
     public let lastAgentMessage: String?
     /// 焦点卡「问」:首个用户提示词(已清洗截断);nil = 未捕获
     public let firstPrompt: String?
+    /// 当前首个未回答问题，供待办卡片直接展示需要处理的内容。
+    public let pendingQuestion: String?
 
     public init(
         provider: AgentProvider = .codex,
@@ -254,7 +256,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
         lifecycleState: TurnLifecycleState? = nil,
         taskCompletedAt: Date?,
         lastAgentMessage: String?,
-        firstPrompt: String? = nil
+        firstPrompt: String? = nil,
+        pendingQuestion: String? = nil
     ) {
         self.provider = provider
         self.sessionID = sessionID
@@ -266,6 +269,7 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
         self.taskCompletedAt = taskCompletedAt
         self.lastAgentMessage = lastAgentMessage
         self.firstPrompt = firstPrompt
+        self.pendingQuestion = pendingQuestion
     }
 
     /// ForEach / 完成集合唯一键:`provider:sessionID`
@@ -288,9 +292,7 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
 
 /// 全量状态快照 —— V4 用「待办优先的列表」取代单焦点状态机
 public struct AgentSnapshot: Equatable, Sendable {
-    /// 正在等待用户选择、审批或输入的会话。
-    public let waiting: [SessionSummary]
-    /// 等待确认的会话,新完成的排前面
+    /// 所有需要用户处理的会话：待回复在前，已结束待确认在后。
     public let todos: [SessionSummary]
     /// 运行中的会话,最近活跃的排前面
     public let running: [SessionSummary]
@@ -298,12 +300,10 @@ public struct AgentSnapshot: Equatable, Sendable {
     public let hasCompletedHistory: Bool
 
     public init(
-        waiting: [SessionSummary] = [],
         todos: [SessionSummary],
         running: [SessionSummary],
         hasCompletedHistory: Bool
     ) {
-        self.waiting = waiting
         self.todos = todos
         self.running = running
         self.hasCompletedHistory = hasCompletedHistory
@@ -311,23 +311,24 @@ public struct AgentSnapshot: Equatable, Sendable {
 
     public static let empty = AgentSnapshot(todos: [], running: [], hasCompletedHistory: false)
 
-    public var isEmpty: Bool { waiting.isEmpty && todos.isEmpty && running.isEmpty }
+    public var isEmpty: Bool { todos.isEmpty && running.isEmpty }
     public var hasTodo: Bool { !todos.isEmpty }
-    public var hasWaiting: Bool { !waiting.isEmpty }
-    public var hasActionRequired: Bool { hasWaiting || hasTodo }
+    public var hasActionRequired: Bool { hasTodo }
     public var isActive: Bool { !running.isEmpty }
 
-    /// 只把已观察为运行中、随后进入待办的同一会话视为新待办。
+    /// 已观察的会话进入待办，或待回复与待确认互相切换时触发提醒。
     /// 直接从空快照发现的历史待办不会触发启动通知。
     public func newTodos(comparedTo previous: AgentSnapshot) -> [SessionSummary] {
         let previouslyRunningIDs = Set(previous.running.map(\.id))
-        return todos.filter { previouslyRunningIDs.contains($0.id) }
+        return todos.filter { session in
+            previouslyRunningIDs.contains(session.id)
+                || previous.todos.contains { $0.id == session.id && $0.lifecycleState != session.lifecycleState }
+        }
     }
 
-    /// 只把已观察为运行中、随后进入等待用户状态的同一会话视为新等待。
-    public func newWaiting(comparedTo previous: AgentSnapshot) -> [SessionSummary] {
-        let previouslyRunningIDs = Set(previous.running.map(\.id))
-        return waiting.filter { previouslyRunningIDs.contains($0.id) }
+    /// 只有工作已结束的待办可以直接标记完成；待回复必须回到会话实际处理。
+    public var completableTodos: [SessionSummary] {
+        todos.filter { $0.lifecycleState == .completed }
     }
 }
 

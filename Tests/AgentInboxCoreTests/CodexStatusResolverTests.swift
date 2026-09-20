@@ -162,7 +162,7 @@ func runningSessionsAreAllKeptAndSortedByRecency() {
 }
 
 @Test
-func waitingSessionsAreExposedSeparatelyFromTodosAndRunning() {
+func waitingSessionsAreTodosRequiringAction() {
     let now = Date(timeIntervalSince1970: 10_000)
     let waiting = makeSummary(
         id: "waiting",
@@ -175,10 +175,10 @@ func waitingSessionsAreExposedSeparatelyFromTodosAndRunning() {
         now: now
     )
 
-    #expect(snapshot.waiting.map(\.id) == ["codex:waiting"])
-    #expect(snapshot.todos.isEmpty)
+    #expect(snapshot.todos.map(\.id) == ["codex:waiting"])
     #expect(snapshot.running.isEmpty)
-    #expect(snapshot.hasWaiting)
+    #expect(snapshot.hasTodo)
+    #expect(snapshot.completableTodos.isEmpty)
     #expect(snapshot.hasActionRequired)
 }
 

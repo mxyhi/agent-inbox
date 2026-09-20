@@ -19,9 +19,9 @@ public struct AgentStatusResolver: Sendable {
         self.todoRetentionInterval = todoRetentionInterval
     }
 
-    /// 把原始扫描结果解析为 UI 快照:等待用户优先、待办其次、运行中最后
+    /// 把原始扫描结果解析为 UI 快照:待办优先（待回复在最前）、运行中最后
     /// - running:lifecycle 是 running,且 staleRunningInterval 内有写入,最近活跃在前
-    /// - todos:lifecycle 是 completed、尚未确认、完成时间在 todoRetentionInterval 内,最新完成在前
+    /// - todos:待回复优先；已完成且未确认的会话按完成时间排序，均限制在保留窗口内
     /// - hasCompletedHistory:用户历史上是否手动确认过任务
     public func resolve(
         summaries: [SessionSummary],
@@ -55,8 +55,7 @@ public struct AgentStatusResolver: Sendable {
             .sorted { ($0.taskCompletedAt ?? .distantPast) > ($1.taskCompletedAt ?? .distantPast) }
 
         return AgentSnapshot(
-            waiting: waiting,
-            todos: todos,
+            todos: waiting + todos,
             running: running,
             hasCompletedHistory: !completedSessionIDs.isEmpty
         )

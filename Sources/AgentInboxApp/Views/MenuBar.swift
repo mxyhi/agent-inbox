@@ -17,27 +17,23 @@ struct MenuContentView: View {
 
         Divider()
 
-        // 等待处理区:打开会话后完成选择或审批
-        if viewModel.snapshot.hasWaiting {
-            ForEach(viewModel.snapshot.waiting.prefix(5)) { session in
-                Button("处理「\(session.projectName)」") {
-                    viewModel.openSession(id: session.id)
-                }
-            }
-            Divider()
-        }
-
         // 待办操作区:逐个完成 + 批量完成
         if viewModel.snapshot.hasTodo {
             ForEach(viewModel.snapshot.todos.prefix(5)) { session in
-                Button("完成「\(session.projectName)」") {
-                    viewModel.completeTodo(id: session.id)
+                if session.lifecycleState == .waitingForUser {
+                    Button("待办 · 去处理「\(session.projectName)」") {
+                        viewModel.openSession(id: session.id)
+                    }
+                } else {
+                    Button("完成「\(session.projectName)」") {
+                        viewModel.completeTodo(id: session.id)
+                    }
                 }
             }
 
-            if viewModel.snapshot.todos.count > 1 {
+            if viewModel.snapshot.completableTodos.count > 1 {
                 Button("全部标记完成") {
-                    if confirmCompleteAllTodos(count: viewModel.snapshot.todos.count) {
+                    if confirmCompleteAllTodos(count: viewModel.snapshot.completableTodos.count) {
                         viewModel.completeAllTodos()
                     }
                 }

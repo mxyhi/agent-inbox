@@ -8,20 +8,23 @@ import OSLog
 /// - 扫描与解析全部运行在 actor 的后台 executor 上,主线程零文件 IO;
 /// - actor 隔离天然保护 mtime 缓存的并发安全,mtime 未变的文件直接命中缓存、跳过解析。
 public actor CodexSessionMonitor {
-    /// 缓存条目:文件 mtime + 上次解析出的摘要
+    /// 缓存条目:mtime + 文件身份 + 已提交的解析偏移与状态。
     private struct CachedEntry {
         let modifiedAt: Date
         let summary: SessionSummary
+        let fileNumber: UInt64?
+        let fileSize: UInt64
+        let state: CodexRolloutState
     }
 
-    /// rollout 单行外层信封(head/tail 共用),只解码判定所需的字段
+    /// rollout 头部信封，仅解码会话身份与首个提示词所需字段。
     private struct RolloutLine: Decodable {
         let timestamp: String?
         let type: String
         let payload: RolloutPayload?
     }
 
-    /// rollout 行 payload:session_meta / lifecycle / item_completed 三类字段的并集。
+    /// 文件头中的 session_meta / user_message 字段。
     private struct RolloutPayload: Decodable {
         /// session_meta:会话 ID(真实数据 id 与 session_id 并存,优先 id)
         let id: String?
@@ -36,8 +39,6 @@ public actor CodexSessionMonitor {
         let lastAgentMessage: String?
         /// user_message:用户输入原文(可能是几 KB 的终端粘贴,含多行/ASCII art),存前需清洗截断
         let message: String?
-        /// item_completed:用户消息或异步追问的 item
-        let item: RolloutItem?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -47,25 +48,7 @@ public actor CodexSessionMonitor {
             case timestamp
             case lastAgentMessage = "last_agent_message"
             case message
-            case item
         }
-    }
-
-    /// Codex item_completed.item 的最小解码模型。
-    private struct RolloutItem: Decodable {
-        let type: String?
-        let delivery: String?
-        let questions: [AsyncQuestion]?
-        let content: [RolloutContent]?
-    }
-
-    private struct AsyncQuestion: Decodable {
-        let title: String?
-    }
-
-    private struct RolloutContent: Decodable {
-        let type: String?
-        let text: String?
     }
 
     /// head 解析结果:session_meta 三元组 + 首个用户提示词
@@ -77,18 +60,9 @@ public actor CodexSessionMonitor {
         var firstPrompt: String?
     }
 
-    /// tail 解析结果:最近 lifecycle event 与 task_complete 附带信息
-    private struct TailInfo {
-        var lifecycleState: TurnLifecycleState = .unknown
-        var taskCompletedAt: Date?
-        var lastAgentMessage: String?
-        var unansweredQuestions: [String] = []
-    }
-
     public nonisolated let sessionsRoot: URL
     private let maxFiles: Int
     private let headByteLimit: Int
-    private let tailByteLimit: UInt64
     private let logger = Logger(subsystem: "agent-inbox", category: "CodexSessionMonitor")
 
     /// 主解析器:真实 rollout 时间戳带毫秒(如 "2026-07-04T14:23:29.440Z")。
@@ -106,13 +80,12 @@ public actor CodexSessionMonitor {
         maxFiles: Int = 80,
         // head 需覆盖到首个 user_message:真提示词稳定落在 ~90KB–114KB 处(前面 developer/permissions
         // ~47KB、AGENTS.md ~11KB、turn_context ~13KB 把它顶下去),故取 256KB 才能扫到
-        headByteLimit: Int = 256 * 1024,
-        tailByteLimit: UInt64 = 256 * 1024
+        headByteLimit: Int = 256 * 1024
     ) {
-        self.sessionsRoot = sessionsRoot
+        // macOS 的 /var 与 /private/var 可指向同一文件，扫描与 FSEvents 必须共用缓存键。
+        self.sessionsRoot = sessionsRoot.resolvingSymlinksInPath()
         self.maxFiles = maxFiles
         self.headByteLimit = headByteLimit
-        self.tailByteLimit = tailByteLimit
 
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -138,7 +111,7 @@ public actor CodexSessionMonitor {
         summaries.reserveCapacity(files.count)
 
         for file in files {
-            let path = file.url.path
+            let path = file.url.resolvingSymlinksInPath().path
             // mtime 未变 → 内容未变,直接复用上次解析结果
             if let entry = cache[path], entry.modifiedAt == file.modifiedAt {
                 summaries.append(entry.summary)
@@ -147,16 +120,16 @@ public actor CodexSessionMonitor {
             }
 
             do {
-                let summary = try parseRollout(at: file.url, modifiedAt: file.modifiedAt)
-                cache[path] = CachedEntry(modifiedAt: file.modifiedAt, summary: summary)
-                summaries.append(summary)
+                let entry = try parseRollout(at: file.url, modifiedAt: file.modifiedAt)
+                cache[path] = entry
+                summaries.append(entry.summary)
             } catch {
                 logger.error("Failed to parse rollout \(path, privacy: .public): \(String(describing: error), privacy: .public)")
             }
         }
 
         // 淘汰跌出「最近 maxFiles」窗口的缓存条目,防止缓存无限增长
-        let alivePaths = Set(files.map(\.url.path))
+        let alivePaths = Set(files.map { $0.url.resolvingSymlinksInPath().path })
         cache = cache.filter { alivePaths.contains($0.key) }
 
         logger.debug("Scanned \(files.count, privacy: .public) rollout files, cache hits \(cacheHits, privacy: .public)")
@@ -184,7 +157,7 @@ public actor CodexSessionMonitor {
         var requiresFullScan = false
 
         for path in changedPaths {
-            let url = URL(filePath: path).standardizedFileURL
+            let url = URL(filePath: path).standardizedFileURL.resolvingSymlinksInPath()
             if isRolloutFile(url) {
                 rolloutPaths.insert(url.path)
             } else if isLikelyDirectoryEvent(url, fileManager: fileManager) {
@@ -246,7 +219,7 @@ public actor CodexSessionMonitor {
     }
 
     private func updateCachedRollout(at url: URL, fileManager: FileManager) -> Bool {
-        let path = url.path
+        let path = url.resolvingSymlinksInPath().path
         do {
             let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
             guard values.isRegularFile == true, let modifiedAt = values.contentModificationDate else {
@@ -257,8 +230,7 @@ public actor CodexSessionMonitor {
                 return false
             }
 
-            let summary = try parseRollout(at: url, modifiedAt: modifiedAt)
-            cache[path] = CachedEntry(modifiedAt: modifiedAt, summary: summary)
+            cache[path] = try parseRollout(at: url, modifiedAt: modifiedAt)
             return true
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
             cache.removeValue(forKey: path)
@@ -302,29 +274,42 @@ public actor CodexSessionMonitor {
 
     // MARK: - 单文件解析
 
-    /// 解析单个 rollout 文件:head 取 session_meta(id/cwd/startedAt),tail 取最近生命周期事件
-    private func parseRollout(at url: URL, modifiedAt: Date) throws -> SessionSummary {
+    /// 首次分块恢复全部状态，文件追加时从已提交偏移继续，截断或替换则重新恢复。
+    private func parseRollout(at url: URL, modifiedAt: Date) throws -> CachedEntry {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
 
         let decoder = JSONDecoder()
         let head = parseHead(handle: handle, decoder: decoder, url: url)
-        let tail = parseTail(handle: handle, decoder: decoder, url: url, modifiedAt: modifiedAt)
+        let size = try handle.seekToEnd()
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let fileNumber = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value
+        let previous = cache[url.resolvingSymlinksInPath().path]
+        // rollout 正常只追加；同长改写、缩短或 inode 变化时不能复用旧问题。
+        let canResume = previous.map {
+            fileNumber != nil && $0.fileNumber == fileNumber && size > $0.fileSize
+        } ?? false
+        var state = CodexRolloutState()
+        if canResume, let previous { state = previous.state }
+        let visible = try state.read(handle: handle, size: size, modifiedAt: modifiedAt, parseDate: parseISO8601)
+        logger.debug("Parsed rollout: resume=\(canResume), bytes=\(size), pendingQuestions=\(visible.unansweredQuestions.count)")
 
         // 源原生 id 保持原值;provider 固定 codex,复合键由 SessionSummary.id 计算
-        return SessionSummary(
+        let summary = SessionSummary(
             provider: .codex,
             // 首行缺 session_meta 或解析失败时,退化为文件名(去扩展名)作为稳定 ID
             sessionID: head.sessionID ?? url.deletingPathExtension().lastPathComponent,
-            filePath: url.path,
+            filePath: url.resolvingSymlinksInPath().path,
             cwd: head.cwd,
             startedAt: head.startedAt,
             modifiedAt: modifiedAt,
-            lifecycleState: tail.lifecycleState,
-            taskCompletedAt: tail.taskCompletedAt,
-            lastAgentMessage: tail.lastAgentMessage,
-            firstPrompt: head.firstPrompt // head 扫描出的首个 user_message(清洗截断后)
+            lifecycleState: visible.lifecycleState,
+            taskCompletedAt: visible.taskCompletedAt,
+            lastAgentMessage: visible.lastAgentMessage,
+            firstPrompt: head.firstPrompt, // head 扫描出的首个 user_message(清洗截断后)
+            pendingQuestion: visible.unansweredQuestions.first
         )
+        return CachedEntry(modifiedAt: modifiedAt, summary: summary, fileNumber: fileNumber, fileSize: size, state: state)
     }
 
     /// 读文件头 headByteLimit 字节:第 0 行取 session_meta(id/cwd/startedAt),
@@ -362,7 +347,7 @@ public actor CodexSessionMonitor {
         if let lastNewline = raw.lastIndex(of: UInt8(ascii: "\n")),
            let text = String(data: Data(raw.prefix(upTo: lastNewline)), encoding: .utf8) {
             for candidate in text.split(separator: "\n", omittingEmptySubsequences: true) {
-                // 子串预筛:绝大多数行不是 user_message,先用包含判断跳过,避免逐行 JSON 解码开销(参考 parseTail)
+                // 子串预筛:绝大多数行不是 user_message,先用包含判断跳过,避免逐行 JSON 解码开销(与流式状态解析一致)
                 guard candidate.contains("\"user_message\"") else { continue }
                 guard let parsed = try? decoder.decode(RolloutLine.self, from: Data(candidate.utf8)),
                       parsed.type == "event_msg",
@@ -380,132 +365,6 @@ public actor CodexSessionMonitor {
         )
 
         return info
-    }
-
-    /// 读文件尾 tailByteLimit 字节,按时间顺序归并 lifecycle 与异步追问。
-    /// Codex 的 request_user_input_async 会先写 item_completed(AgentMessage,
-    /// delivery=async, questions),随后可能写 task_complete;未回答问题必须覆盖完成状态。
-    private func parseTail(handle: FileHandle, decoder: JSONDecoder, url: URL, modifiedAt: Date) -> TailInfo {
-        guard let size = try? handle.seekToEnd() else {
-            logger.warning("Failed to determine rollout size: \(url.path, privacy: .public)")
-            return TailInfo()
-        }
-
-        let offset = size > tailByteLimit ? size - tailByteLimit : 0
-        guard (try? handle.seek(toOffset: offset)) != nil,
-              var data = try? handle.readToEnd() else {
-            logger.warning("Failed to read rollout tail: \(url.path, privacy: .public)")
-            return TailInfo()
-        }
-
-        if offset > 0 {
-            // 从文件中间起读:首行大概率被截断(甚至切在多字节 UTF-8 字符中间),
-            // 在字节层面丢弃第一个换行符之前的内容,保证后续 UTF-8 解码与逐行解析安全
-            if let firstNewline = data.firstIndex(of: UInt8(ascii: "\n")) {
-                data = Data(data.suffix(from: firstNewline + 1))
-            } else {
-                data = Data() // 窗口内没有任何完整行
-            }
-        }
-
-        guard let text = String(data: data, encoding: .utf8) else {
-            logger.warning("Rollout tail is not valid UTF-8: \(url.path, privacy: .public)")
-            return TailInfo()
-        }
-
-        var tail = TailInfo()
-
-        // 正序扫描才能同时处理「先提问、后完成」和「用户回答后恢复」两种顺序。
-        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            // 子串预筛:绝大多数行与 lifecycle/item 无关,避免逐行 JSON 解码的开销
-            guard
-                line.contains("\"task_started\"")
-                    || line.contains("\"turn_started\"")
-                    || line.contains("\"task_complete\"")
-                    || line.contains("\"turn_complete\"")
-                    || line.contains("\"turn_aborted\"")
-                    || line.contains("\"thread_rolled_back\"")
-                    || line.contains("\"exec_approval_request\"")
-                    || line.contains("\"apply_patch_approval_request\"")
-                    || line.contains("\"request_permissions\"")
-                    || line.contains("\"request_user_input\"")
-                    || line.contains("\"elicitation_request\"")
-                    || line.contains("\"questions\"")
-                    || line.contains("\"UserMessage\"")
-                    || line.contains("\"user_message\"")
-            else { continue }
-            guard let parsed = try? decoder.decode(RolloutLine.self, from: Data(line.utf8)) else {
-                continue
-            }
-
-            guard let payload = parsed.payload else { continue }
-
-            if let eventType = payload.type, parsed.type == "event_msg" {
-                switch eventType {
-                case "task_started", "turn_started":
-                    tail.lifecycleState = .running
-                    tail.taskCompletedAt = nil
-                    tail.lastAgentMessage = nil
-                case "exec_approval_request", "apply_patch_approval_request", "request_permissions", "request_user_input", "elicitation_request":
-                    tail.lifecycleState = .waitingForUser
-                case "task_complete", "turn_complete":
-                    // 完成时间优先取事件外层 timestamp(真实数据 payload 内没有 completed_at 字段);
-                    // timestamp 缺失或解析失败时 fallback 到文件 mtime
-                    tail.lifecycleState = .completed
-                    tail.taskCompletedAt = parsed.timestamp.flatMap { parseISO8601($0) } ?? modifiedAt
-                    tail.lastAgentMessage = payload.lastAgentMessage
-                case "turn_aborted":
-                    tail.lifecycleState = .aborted
-                    tail.taskCompletedAt = nil
-                    tail.lastAgentMessage = nil
-                case "thread_rolled_back":
-                    tail.lifecycleState = .rolledBack
-                    tail.taskCompletedAt = nil
-                    tail.lastAgentMessage = nil
-                default:
-                    break
-                }
-            }
-
-            guard let item = payload.item else { continue }
-            if item.type == "AgentMessage", item.delivery == "async" {
-                let titles = item.questions?.compactMap(\.title).filter { !$0.isEmpty } ?? []
-                for title in titles where !tail.unansweredQuestions.contains(title) {
-                    tail.unansweredQuestions.append(title)
-                    logger.debug("Codex async question pending in (url.path, privacy: .public): (title, privacy: .public)")
-                }
-            } else if item.type == "UserMessage" {
-                let message = item.content?
-                    .compactMap(\.text)
-                    .joined(separator: "\n")
-                consumeUserMessage(message, unansweredQuestions: &tail.unansweredQuestions)
-            }
-        }
-
-        if !tail.unansweredQuestions.isEmpty {
-            tail.lifecycleState = .waitingForUser
-        } else if tail.lifecycleState == .unknown {
-            // 尾部可能只有普通 message/tool 事件;保留旧 fresh-mtime 运行候选,避免长任务漏报。
-            tail.lifecycleState = .running
-        }
-        return tail
-    }
-
-    /// 处理 Codex TUI 回答异步追问时写入的 UserMessage。
-    /// 形如「> 问题标题\n\n用户回答」只消费对应问题;普通用户消息消费全部旧问题。
-    private func consumeUserMessage(_ message: String?, unansweredQuestions: inout [String]) {
-        guard !unansweredQuestions.isEmpty else { return }
-        guard let message, !message.isEmpty else { return }
-
-        if message.hasPrefix("> "), let separator = message.range(of: "\n\n") {
-            let title = String(message[message.index(message.startIndex, offsetBy: 2)..<separator.lowerBound])
-            if let index = unansweredQuestions.firstIndex(of: title) {
-                unansweredQuestions.remove(at: index)
-                return
-            }
-        }
-
-        unansweredQuestions.removeAll()
     }
 
     // MARK: - 首提示词清洗

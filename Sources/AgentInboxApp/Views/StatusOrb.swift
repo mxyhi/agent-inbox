@@ -4,13 +4,12 @@ import SwiftUI
 /// - 运行中:蓝点呼吸(缩放 + 光晕,周期 1.8s)
 /// - 等待你处理 / 待办:同一套橙点涟漪(每 2.5s 一圈,召唤注意力)
 /// - 空闲:静止灰点
-/// 等待和待办语义仍由行区分(打开 vs 完成);光点只负责「需要你处理」。
+/// 待回复与待确认均为待办，具体动作由卡片文字与按钮说明。
 /// 遵守「减少动画」偏好:reduceMotion 时全部退化为静止实心点。
 struct StatusOrb: View {
     enum Kind {
         case running
         case todo
-        case waiting
         case idle
     }
 
@@ -23,7 +22,7 @@ struct StatusOrb: View {
             switch kind {
             case .running:
                 runningOrb
-            case .todo, .waiting:
+            case .todo:
                 // 等待你处理与待办同样需要注意力;黄静点在深色底上太像空闲。
                 todoOrb
             case .idle:
@@ -118,10 +117,9 @@ struct StatusOrb: View {
 
 // MARK: - Preview
 
-#Preview("四种光点") {
+#Preview("三种光点") {
     HStack(spacing: 24) {
         StatusOrb(kind: .running)
-        StatusOrb(kind: .waiting)
         StatusOrb(kind: .todo)
         StatusOrb(kind: .idle)
     }

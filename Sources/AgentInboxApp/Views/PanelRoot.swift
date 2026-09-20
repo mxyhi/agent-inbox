@@ -4,7 +4,7 @@ import SwiftUI
 
 /// 浮窗根视图 —— 内容驱动尺寸的自适应面板
 /// 空态 = 微型胶囊;有会话 = 300pt 宽列表卡(待办在前、运行中在后)。
-/// 面板上没有任何常驻按钮:唯一操作是待办行的完成按钮,其余全部收进右键菜单。
+/// 待办卡提供去处理或确认完成操作，设置等全局操作收进右键菜单。
 struct PanelRoot: View {
     @ObservedObject var viewModel: AppViewModel
     /// 右键菜单「隐藏浮窗」回调(由 FloatingPanelController 注入)
@@ -29,11 +29,7 @@ struct PanelRoot: View {
                     announce("有新的 Agent 待办")
                 }
             }
-            .onChange(of: viewModel.snapshot.waiting.count) { oldCount, newCount in
-                if newCount > oldCount {
-                    announce("有 Agent 等待你处理")
-                }
-            }
+
     }
 
     // MARK: - 内容分发
@@ -58,9 +54,9 @@ struct PanelRoot: View {
 
     @ViewBuilder
     private var contextMenuItems: some View {
-        if viewModel.snapshot.hasTodo {
+        if !viewModel.snapshot.completableTodos.isEmpty {
             Button("全部标记完成") {
-                if confirmCompleteAllTodos(count: viewModel.snapshot.todos.count) {
+                if confirmCompleteAllTodos(count: viewModel.snapshot.completableTodos.count) {
                     viewModel.completeAllTodos()
                 }
             }
@@ -151,23 +147,16 @@ struct SessionList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            // 等待区:橙点涟漪 + 橙底,视觉与待办同级;动作是打开会话
-            ForEach(snapshot.waiting.prefix(Self.sectionLimit)) { session in
-                WaitingRow(session: session, onOpen: { onOpen(session.id) })
-            }
-
-            if snapshot.waiting.count > Self.sectionLimit {
-                OverflowLabel(text: "还有 \(snapshot.waiting.count - Self.sectionLimit) 个等待你处理")
-            }
-
-            if snapshot.hasWaiting && (snapshot.hasTodo || snapshot.isActive) {
-                Divider()
+            if snapshot.hasTodo {
+                Text("待办 \(snapshot.todos.count)")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(DS.Colors.todo)
                     .padding(.horizontal, DS.Metrics.rowPaddingH)
-                    .padding(.vertical, 2)
+                    .padding(.bottom, 4)
             }
 
             ForEach(Array(snapshot.todos.prefix(Self.sectionLimit).enumerated()), id: \.element.id) { index, session in
-                if index == 0 {
+                if index == 0 || session.lifecycleState == .waitingForUser {
                     FocusTodoCard(
                         session: session,
                         onOpen: { onOpen(session.id) },

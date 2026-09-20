@@ -18,6 +18,11 @@ struct FocusTodoCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Metrics.segmentTagSpacing) {
+            // 明确说明要处理什么，不能让用户靠圆点颜色猜测是否有待办。
+            Text(needsReply ? "待办 · 需要你处理" : "待办 · 待确认")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(DS.Colors.todo)
+
             // 顶行:涟漪橙点 + 项目名 + 源标签 + 完成时间
             HStack(spacing: DS.Metrics.rowSpacing) {
                 StatusOrb(kind: .todo)
@@ -31,7 +36,7 @@ struct FocusTodoCard: View {
 
                 Spacer(minLength: 12)
 
-                RelativeTimeText(date: session.taskCompletedAt ?? session.modifiedAt)
+                RelativeTimeText(date: needsReply ? session.modifiedAt : session.taskCompletedAt ?? session.modifiedAt)
             }
 
             // 问:这活儿的由来(首个用户提示词),缺失则不渲染
@@ -47,22 +52,28 @@ struct FocusTodoCard: View {
             }
 
             // 答:Codex 干完了什么(等你确认的核心),缺失则不渲染
-            if let answer = trimmedAnswer {
+            if let answer = actionDescription {
                 SegmentLine(
                     systemImage: "sparkles",
                     tagColor: DS.Colors.todo,
                     text: answer,
                     font: DS.Fonts.focusAnswer,
                     textColor: .primary.opacity(0.9),
-                    lineLimit: 2
+                    lineLimit: needsReply ? 4 : 2
                 )
             }
 
             // 行动行:打开(弱 ghost) + 长按完成(进度环)
             HStack(spacing: DS.Metrics.rowSpacing) {
                 Spacer(minLength: 0)
-                OpenButton(action: onOpen)
-                HoldToCompleteButton(action: onComplete)
+                if needsReply {
+                    Button("去处理 ↗", action: onOpen)
+                        .buttonStyle(.borderedProminent)
+                        .tint(DS.Colors.todo)
+                } else {
+                    OpenButton(action: onOpen)
+                    HoldToCompleteButton(action: onComplete)
+                }
             }
         }
         .padding(.horizontal, DS.Metrics.focusCardPadH)
@@ -80,10 +91,14 @@ struct FocusTodoCard: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("待办:\(session.projectName)")
         .accessibilityValue(accessibilityValue)
-        .accessibilityAction(named: "标记完成", onComplete)
+        .accessibilityActions {
+            if !needsReply {
+                Button("标记完成", action: onComplete)
+            }
+        }
         .accessibilityAction(named: "打开会话", onOpen)
         .contextMenu {
-            if trimmedPrompt != nil {
+            if !needsReply && trimmedPrompt != nil {
                 Button("按此提示词过滤") {
                     onCreateFilter()
                 }
@@ -101,9 +116,16 @@ struct FocusTodoCard: View {
         session.lastAgentMessage?.trimmed
     }
 
+    private var needsReply: Bool { session.lifecycleState == .waitingForUser }
+
+    /// 待回复显示真正的问题，避免把之前的交付摘要错当成当前待办内容。
+    private var actionDescription: String? {
+        needsReply ? session.pendingQuestion?.trimmed ?? "会话正在等待你的选择、审批或输入。" : trimmedAnswer
+    }
+
     /// VoiceOver 朗读值:把问/答拼成一句
     private var accessibilityValue: String {
-        [trimmedPrompt.map { "问:\($0)" }, trimmedAnswer.map { "答:\($0)" }]
+        [trimmedPrompt.map { "问:\($0)" }, actionDescription.map { needsReply ? "需要你处理:\($0)" : "答:\($0)" }]
             .compactMap { $0 }
             .joined(separator: ";")
     }
@@ -112,7 +134,7 @@ struct FocusTodoCard: View {
 // MARK: - 问/答 段
 
 /// 带前缀图标的单段文本 —— 图标占位宽与状态光点框对齐,使正文与上方标题左对齐成列。
-/// 用 SF Symbol(单色)替代「问/答」文字:更贴合「状态不靠文字标签」的设计语言。
+/// 用既有 SF Symbol 区分上下文与交付内容，待办动作另有明确文字标签。
 private struct SegmentLine: View {
     /// 段前缀 SF Symbol 名(问=引号符、答=闪光符)
     let systemImage: String
@@ -216,46 +238,6 @@ struct RunningRow: View {
         .padding(.horizontal, DS.Metrics.rowPaddingH)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("运行中:\(session.projectName)")
-    }
-}
-
-// MARK: - 等待用户处理行
-
-/// 等待行 —— Codex 已暂停在选择、审批或输入请求上；打开会话后由用户继续处理。
-/// 视觉沿用待办注意力语言(橙点涟漪 + 橙底),动作仍是打开而不是完成。
-struct WaitingRow: View {
-    let session: SessionSummary
-    let onOpen: () -> Void
-
-    var body: some View {
-        HStack(spacing: DS.Metrics.rowSpacing) {
-            StatusOrb(kind: .waiting)
-
-            Text(session.projectName)
-                .font(DS.Fonts.rowTitle)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-
-            ProviderTag(provider: session.provider)
-
-            Spacer(minLength: 12)
-
-            RelativeTimeText(date: session.modifiedAt)
-            OpenButton(action: onOpen)
-        }
-        .padding(.vertical, DS.Metrics.rowPaddingV)
-        .padding(.horizontal, DS.Metrics.rowPaddingH)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Metrics.focusCardRadius, style: .continuous)
-                .fill(DS.Colors.focusCardFill)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.Metrics.focusCardRadius, style: .continuous)
-                .strokeBorder(DS.Colors.focusCardStroke, lineWidth: 0.5)
-        )
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("等待你处理:\(session.projectName)")
-        .accessibilityAction(named: "打开会话", onOpen)
     }
 }
 
@@ -414,7 +396,7 @@ private extension String {
 
 #Preview("会话列表") {
     VStack(alignment: .leading, spacing: 2) {
-        WaitingRow(session: .mockWaiting, onOpen: {})
+        FocusTodoCard(session: .mockWaiting, onOpen: {}, onComplete: {}, onCreateFilter: {})
         Divider()
         FocusTodoCard(session: .mockTodo, onOpen: {}, onComplete: {}, onCreateFilter: {})
             .padding(.bottom, DS.Metrics.focusCardGap)
@@ -490,7 +472,8 @@ extension SessionSummary {
             lifecycleState: .waitingForUser,
             taskCompletedAt: nil,
             lastAgentMessage: "需要你选择接下来的处理方式。",
-            firstPrompt: "继续处理号池同步"
+            firstPrompt: "继续处理号池同步",
+            pendingQuestion: "是否同步全部平台？请选择需要执行的范围。"
         )
     }
 

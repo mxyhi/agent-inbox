@@ -47,14 +47,13 @@ done
 log "building ${PRODUCT_NAME} ${VERSION} (${BUILD_NUMBER}) for ${ARCHS}"
 swift build "${swift_build_args[@]}"
 
-binary_path="${ROOT_DIR}/.build/apple/Products/Release/${PRODUCT_NAME}"
+# 跟随本次 SwiftPM 构建的实际输出目录，避免工具链升级后误打包缓存中的旧二进制。
+binary_path="$(swift build "${swift_build_args[@]}" --show-bin-path)/${PRODUCT_NAME}"
 if [[ ! -x "${binary_path}" ]]; then
-    binary_path="$(find "${ROOT_DIR}/.build" -type f -name "${PRODUCT_NAME}" -path '*/[Rr]elease/*' -perm +111 | sort | tail -n 1)"
-fi
-if [[ -z "${binary_path}" ]]; then
-    log "release binary not found"
+    log "release binary not found at ${binary_path}"
     exit 1
 fi
+log "using release binary ${binary_path}"
 
 log "creating app bundle at ${APP_DIR}"
 rm -rf "${APP_DIR}"

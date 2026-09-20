@@ -38,13 +38,24 @@ func runningSessionTransitioningToTodoIsNewTodo() {
 }
 
 @Test
-func runningSessionTransitioningToWaitingIsNewWaiting() {
+func runningSessionTransitioningToWaitingIsNewTodo() {
     let running = makeTransitionSummary(id: "session", lifecycleState: .running)
     let waiting = makeTransitionSummary(id: "session", lifecycleState: .waitingForUser)
     let previous = AgentSnapshot(todos: [], running: [running], hasCompletedHistory: false)
-    let next = AgentSnapshot(waiting: [waiting], todos: [], running: [], hasCompletedHistory: false)
+    let next = AgentSnapshot(todos: [waiting], running: [], hasCompletedHistory: false)
 
-    #expect(next.newWaiting(comparedTo: previous).map(\.id) == ["codex:session"])
+    #expect(next.newTodos(comparedTo: previous).map(\.id) == ["codex:session"])
+}
+
+/// Codex 可先完成再异步追问，不能因上一快照已有待办而漏掉新的处理请求。
+@Test
+func completedSessionReceivingQuestionNotifiesAsNewTodo() {
+    let completed = makeTransitionSummary(id: "session", lifecycleState: .completed)
+    let waiting = makeTransitionSummary(id: "session", lifecycleState: .waitingForUser)
+    let previous = AgentSnapshot(todos: [completed], running: [], hasCompletedHistory: false)
+    let next = AgentSnapshot(todos: [waiting], running: [], hasCompletedHistory: false)
+    #expect(next.newTodos(comparedTo: previous).map(\.id) == ["codex:session"])
+    #expect(next.newTodos(comparedTo: next).isEmpty)
 }
 
 @Test
