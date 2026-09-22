@@ -54,9 +54,9 @@ struct PanelRoot: View {
 
     @ViewBuilder
     private var contextMenuItems: some View {
-        if !viewModel.snapshot.completableTodos.isEmpty {
+        if !viewModel.snapshot.todos.isEmpty {
             Button("全部标记完成") {
-                if confirmCompleteAllTodos(count: viewModel.snapshot.completableTodos.count) {
+                if confirmCompleteAllTodos(count: viewModel.snapshot.todos.count) {
                     viewModel.completeAllTodos()
                 }
             }
@@ -147,14 +147,7 @@ struct SessionList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            if snapshot.hasTodo {
-                Text("待办 \(snapshot.todos.count)")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(DS.Colors.todo)
-                    .padding(.horizontal, DS.Metrics.rowPaddingH)
-                    .padding(.bottom, 4)
-            }
-
+            // 待办状态由卡片标题表达，不重复显示外层计数标题。
             ForEach(Array(snapshot.todos.prefix(Self.sectionLimit).enumerated()), id: \.element.id) { index, session in
                 if index == 0 || session.lifecycleState == .waitingForUser {
                     FocusTodoCard(

@@ -90,6 +90,10 @@ enum DS {
         static let completeButtonFrame: CGFloat = 28
         /// 长按进度环线宽
         static let completeRingWidth: CGFloat = 2
+        /// 长按完成允许的指针抖动。超过后手势取消。
+        static let holdToCompleteSlop: CGFloat = 12
+        /// 浮窗拖动阈值。必须大于 holdToCompleteSlop：先让长按取消，再拖窗口，避免拖动时把待办标记完成。
+        static let windowDragThreshold: CGFloat = 16
     }
 
     // MARK: - 动画

@@ -113,6 +113,87 @@ func questionStateResetsWhenLogIsReplaced(atomic: Bool) async throws {
     #expect(result.lastAgentMessage == "完成")
 }
 
+/// 本地确认只收起提醒：追加输出、完成事件、冷启动均不复活它，后续新请求仍提醒。
+@Test
+func acknowledgedQuestionStaysHiddenAcrossRefreshAndRestart() async throws {
+    let fixture = try QuestionRollout()
+    defer { fixture.remove() }
+    try fixture.append(QuestionRollout.question)
+    let monitor = CodexSessionMonitor(sessionsRoot: fixture.root)
+    let original = try #require(await monitor.scan().first)
+    #expect(original.pendingRequestID != nil)
+
+    var state = PersistedState(trackingStartedAt: .distantPast)
+    state.acknowledgeTodo(original)
+    let store = StateStore(databaseURL: fixture.root.appending(path: "state.sqlite"))
+    await store.save(state)
+    let restored = await StateStore(databaseURL: fixture.root.appending(path: "state.sqlite")).load()
+    #expect(restored.acknowledgedRequests == state.acknowledgedRequests)
+    #expect(restored.completedSessionIDs.isEmpty)
+
+    try fixture.append(QuestionRollout.largeOutput + QuestionRollout.completion)
+    let refreshed = await monitor.scanChangedPaths([fixture.file.path])
+    let restarted = await CodexSessionMonitor(sessionsRoot: fixture.root).scan()
+    for summaries in [refreshed, restarted] {
+        #expect(summaries.first?.pendingRequestID == original.pendingRequestID)
+        // 源问题仍未回答，本地 resolver 只隐藏已确认的提醒。
+        #expect(summaries.first?.lifecycleState == .waitingForUser)
+        let snapshot = AgentStatusResolver().resolve(
+            summaries: summaries,
+            completedSessionIDs: restored.completedSessionIDs,
+            acknowledgedRequests: restored.acknowledgedRequests
+        )
+        #expect(snapshot.todos.isEmpty)
+        #expect(snapshot.hasCompletedHistory)
+    }
+
+    // 真正回答后恢复交付待确认，不受请求确认记录影响。
+    try fixture.append(QuestionRollout.answer)
+    let answered = await monitor.scanChangedPaths([fixture.file.path])
+    let delivery = AgentStatusResolver().resolve(
+        summaries: answered,
+        completedSessionIDs: restored.completedSessionIDs,
+        acknowledgedRequests: restored.acknowledgedRequests
+    )
+    #expect(delivery.todos.first?.lifecycleState == .completed)
+    let dismissed = AgentSnapshot(todos: [], running: [], hasCompletedHistory: true)
+    #expect(delivery.newTodos(comparedTo: dismissed, acknowledgedRequests: restored.acknowledgedRequests).count == 1)
+
+    // 同样文案再次发问也是新请求；提醒一次后不重复通知。
+    try fixture.append(QuestionRollout.question)
+    let repeated = try #require(await monitor.scanChangedPaths([fixture.file.path]).first)
+    #expect(repeated.pendingQuestion == original.pendingQuestion)
+    #expect(repeated.pendingRequestID != original.pendingRequestID)
+    let next = AgentStatusResolver().resolve(
+        summaries: [repeated], completedSessionIDs: [], acknowledgedRequests: restored.acknowledgedRequests
+    )
+    #expect(next.todos.count == 1)
+    #expect(next.newTodos(comparedTo: dismissed, acknowledgedRequests: restored.acknowledgedRequests).count == 1)
+    #expect(next.newTodos(comparedTo: next, acknowledgedRequests: restored.acknowledgedRequests).isEmpty)
+    #expect(next.newTodos(comparedTo: .empty).isEmpty)
+}
+
+/// 已确认的卡片后来收到另一个问题，或无问题文案的审批请求更新，都必须重新出现。
+@Test(arguments: [true, false])
+func newRequestAfterAcknowledgementReappears(asyncQuestion: Bool) async throws {
+    let fixture = try QuestionRollout()
+    defer { fixture.remove() }
+    let event = asyncQuestion ? QuestionRollout.question
+        : "{\"type\":\"event_msg\",\"payload\":{\"type\":\"exec_approval_request\"}}\n"
+    try fixture.append(event)
+    let monitor = CodexSessionMonitor(sessionsRoot: fixture.root)
+    let original = try #require(await monitor.scan().first)
+    var state = PersistedState()
+    state.acknowledgeTodo(original)
+    try fixture.append(event.replacingOccurrences(of: "继续吗？", with: "第二个问题"))
+    let current = try #require(await monitor.scanChangedPaths([fixture.file.path]).first)
+    #expect(current.pendingRequestID != original.pendingRequestID)
+    let snapshot = AgentStatusResolver().resolve(
+        summaries: [current], completedSessionIDs: [], acknowledgedRequests: state.acknowledgedRequests
+    )
+    #expect(snapshot.todos.count == 1)
+}
+
 /// 合成记录不含真实对话；使用真实追加写法覆盖缓存路径。
 private struct QuestionRollout {
     let root: URL

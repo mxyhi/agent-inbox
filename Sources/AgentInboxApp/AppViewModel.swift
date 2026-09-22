@@ -103,15 +103,15 @@ final class AppViewModel: ObservableObject {
 
     /// 完成单个待办 —— 乐观更新:立即从快照剔除,点击反馈零延迟
     func completeTodo(id: String) {
-        guard snapshot.completableTodos.contains(where: { $0.id == id }) else { return }
+        guard let session = snapshot.todos.first(where: { $0.id == id }) else { return }
 
-        persistedState.completedSessionIDs.insert(id)
+        persistedState.acknowledgeTodo(session)
         snapshot = AgentSnapshot(
             todos: snapshot.todos.filter { $0.id != id },
             running: snapshot.running,
             hasCompletedHistory: true
         )
-        logger.info("待办已完成: \(id, privacy: .public)")
+        logger.info("待办已在 Inbox 确认: \(id, privacy: .public), waiting=\(session.lifecycleState == .waitingForUser)")
 
         Task {
             await stateStore.save(persistedState)
@@ -138,14 +138,14 @@ final class AppViewModel: ObservableObject {
 
     /// 一键完成全部待办(右键菜单/菜单栏)
     func completeAllTodos() {
-        guard !snapshot.completableTodos.isEmpty else { return }
+        guard !snapshot.todos.isEmpty else { return }
 
-        for todo in snapshot.completableTodos {
-            persistedState.completedSessionIDs.insert(todo.id)
+        for todo in snapshot.todos {
+            persistedState.acknowledgeTodo(todo)
         }
-        let count = snapshot.completableTodos.count
+        let count = snapshot.todos.count
         snapshot = AgentSnapshot(
-            todos: snapshot.todos.filter { $0.lifecycleState == .waitingForUser },
+            todos: [],
             running: snapshot.running,
             hasCompletedHistory: true
         )
@@ -389,19 +389,24 @@ final class AppViewModel: ObservableObject {
         let next = resolver.resolve(
             summaries: summaries,
             completedSessionIDs: persistedState.completedSessionIDs,
+            acknowledgedRequests: persistedState.acknowledgedRequests,
             promptFilterRules: persistedState.promptFilterRules,
             trackingStartedAt: persistedState.trackingStartedAt
         )
 
         if next != snapshot {
-            let newTodos = next.newTodos(comparedTo: snapshot)
+            let newTodos = next.newTodos(
+                comparedTo: snapshot,
+                acknowledgedRequests: hasLoadedInitialSnapshot ? persistedState.acknowledgedRequests : [:]
+            )
             logger.info("快照变化: 待办 \(next.todos.count) · 运行 \(next.running.count)")
             snapshot = next
             notifyNewTodos(newTodos)
         }
     }
 
-    /// 再次运行或提问时解除完成标记，避免漏采运行态后把下一轮交付误隐藏。
+    /// 再次运行或提问时解除交付完成标记，避免漏采运行态后把下一轮交付误隐藏。
+    /// 请求确认独立保留，由请求标识区分新旧，不能在 waiting 扫描时解除。
     private func rearmCompletedSessionsIfRunning(_ summaries: [SessionSummary]) {
         let runningIDs = Set(
             summaries

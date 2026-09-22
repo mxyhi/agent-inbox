@@ -25,12 +25,25 @@ struct CodexRolloutState {
     private struct Question: Decodable { let title: String? }
     private struct Content: Decodable { let text: String? }
 
+    struct PendingQuestion {
+        let id: String
+        let title: String
+    }
+
     private static let logger = Logger(subsystem: "agent-inbox", category: "CodexRolloutState")
     private(set) var offset: UInt64 = 0
     private var lifecycle: TurnLifecycleState = .running
     private(set) var taskCompletedAt: Date?
     private(set) var lastAgentMessage: String?
-    private(set) var unansweredQuestions: [String] = []
+    private(set) var unansweredQuestions: [PendingQuestion] = []
+    private var waitingRequestID: String?
+
+    /// 按事件位置识别请求；冷启动、增量读取和普通输出都得到同一个确认标识。
+    var pendingRequestID: String? {
+        unansweredQuestions.isEmpty
+            ? (lifecycle == .waitingForUser ? waitingRequestID : nil)
+            : unansweredQuestions.map(\.id).joined(separator: "|")
+    }
 
     // 待回答是展示覆盖层，不能覆盖底层完成态，否则回答后无法恢复。
     var lifecycleState: TurnLifecycleState {
@@ -99,6 +112,7 @@ struct CodexRolloutState {
             lastAgentMessage = nil
         case "exec_approval_request", "apply_patch_approval_request", "request_permissions", "request_user_input", "elicitation_request":
             lifecycle = .waitingForUser
+            waitingRequestID = "\(offset):\(event.timestamp ?? "")"
         case "task_complete", "turn_complete":
             lifecycle = .completed
             taskCompletedAt = event.timestamp.flatMap(parseDate) ?? modifiedAt
@@ -111,9 +125,12 @@ struct CodexRolloutState {
         case "item_completed":
             guard let item = payload.item else { return }
             if item.type == "AgentMessage", item.delivery == "async" {
-                for title in item.questions?.compactMap(\.title) ?? []
-                    where !title.isEmpty && !unansweredQuestions.contains(title) {
-                    unansweredQuestions.append(title)
+                for (index, title) in (item.questions?.compactMap(\.title) ?? []).enumerated()
+                    where !title.isEmpty && !unansweredQuestions.contains(where: { $0.title == title }) {
+                    unansweredQuestions.append(PendingQuestion(
+                        id: "\(offset):\(index):\(event.timestamp ?? "")",
+                        title: title
+                    ))
                 }
             } else if item.type == "UserMessage" {
                 consumeAnswer(item.content?.compactMap(\.text).joined(separator: "\n"))
@@ -128,7 +145,7 @@ struct CodexRolloutState {
         guard let message, !message.isEmpty, !unansweredQuestions.isEmpty else { return }
         if message.hasPrefix("> "), let separator = message.range(of: "\n\n") {
             let title = String(message[message.index(message.startIndex, offsetBy: 2)..<separator.lowerBound])
-            unansweredQuestions.removeAll { $0 == title }
+            unansweredQuestions.removeAll { $0.title == title }
         } else {
             unansweredQuestions.removeAll()
         }

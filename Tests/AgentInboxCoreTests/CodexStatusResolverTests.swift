@@ -178,7 +178,6 @@ func waitingSessionsAreTodosRequiringAction() {
     #expect(snapshot.todos.map(\.id) == ["codex:waiting"])
     #expect(snapshot.running.isEmpty)
     #expect(snapshot.hasTodo)
-    #expect(snapshot.completableTodos.isEmpty)
     #expect(snapshot.hasActionRequired)
 }
 

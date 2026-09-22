@@ -72,8 +72,9 @@ struct FocusTodoCard: View {
                         .tint(DS.Colors.todo)
                 } else {
                     OpenButton(action: onOpen)
-                    HoldToCompleteButton(action: onComplete)
                 }
+                // 所有待办均可确认收起；等待回复时不代替原会话回答。
+                HoldToCompleteButton(action: onComplete)
             }
         }
         .padding(.horizontal, DS.Metrics.focusCardPadH)
@@ -91,11 +92,7 @@ struct FocusTodoCard: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("待办:\(session.projectName)")
         .accessibilityValue(accessibilityValue)
-        .accessibilityActions {
-            if !needsReply {
-                Button("标记完成", action: onComplete)
-            }
-        }
+        .accessibilityAction(named: "标记完成", onComplete)
         .accessibilityAction(named: "打开会话", onOpen)
         .contextMenu {
             if !needsReply && trimmedPrompt != nil {
@@ -335,7 +332,7 @@ struct HoldToCompleteButton: View {
         .animation(DS.Anim.hover, value: isPressing)
         .onLongPressGesture(
             minimumDuration: DS.Anim.holdToComplete,
-            maximumDistance: 12,
+            maximumDistance: DS.Metrics.holdToCompleteSlop,
             pressing: { handlePressing($0) },
             perform: { triggerComplete() }
         )

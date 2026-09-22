@@ -26,6 +26,7 @@ public actor StateStore {
             let pinMode = try readPinMode(database) ?? .todoOnly
             let trackingStartedAt = try ensureTrackingStartedAt(database)
             let completedSessionIDs = try readCompletedSessionIDs(database)
+            let acknowledgedRequests = try readAcknowledgedRequests(database)
             let panelAnchor = try readPanelAnchor(database)
             let promptFilterRules = try readPromptFilterRules(database)
             let openSessionConfig = try readOpenSessionConfig(database)
@@ -35,6 +36,7 @@ public actor StateStore {
             return PersistedState(
                 pinMode: pinMode,
                 completedSessionIDs: completedSessionIDs,
+                acknowledgedRequests: acknowledgedRequests,
                 trackingStartedAt: trackingStartedAt,
                 panelAnchor: panelAnchor,
                 promptFilterRules: promptFilterRules,
@@ -59,6 +61,7 @@ public actor StateStore {
                 try saveTrackingStartedAt(state.trackingStartedAt, database)
                 try savePanelAnchor(state.panelAnchor, database)
                 try replaceCompletedSessions(state.completedSessionIDs, database)
+                try saveAcknowledgedRequests(state.acknowledgedRequests, database)
                 try replacePromptFilterRules(state.promptFilterRules, database)
                 try saveOpenSessionConfig(state.openSessionConfig, database)
                 try saveNetworkProxyConfig(state.updateProxyConfig, database)
@@ -137,6 +140,25 @@ public actor StateStore {
         if removedFullscreenSettings > 0 {
             logger.info("Removed \(removedFullscreenSettings) obsolete fullscreen settings")
         }
+    }
+
+    /// 复用 settings 保存请求确认映射，与其他设置同事务提交，重启后仍生效。
+    private func readAcknowledgedRequests(_ database: OpaquePointer) throws -> [String: String] {
+        guard let json = try querySingleText(
+            database,
+            sql: "SELECT value FROM settings WHERE key = ?",
+            bindings: [.text("acknowledged_requests")]
+        ) else { return [:] }
+        return try JSONDecoder().decode([String: String].self, from: Data(json.utf8))
+    }
+
+    private func saveAcknowledgedRequests(_ requests: [String: String], _ database: OpaquePointer) throws {
+        let json = String(decoding: try JSONEncoder().encode(requests), as: UTF8.self)
+        try execute(
+            database,
+            "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            bindings: [.text("acknowledged_requests"), .text(json)]
+        )
     }
 
     private func readPinMode(_ database: OpaquePointer) throws -> PinMode? {

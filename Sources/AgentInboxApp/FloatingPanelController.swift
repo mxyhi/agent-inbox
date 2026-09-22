@@ -26,6 +26,8 @@ final class FloatingPanelController {
     private var anchor: NSPoint = .zero
     /// 程序化移动期间抑制 didMove 的锚点回写
     private var isProgrammaticMove = false
+    /// 用户拖动浮窗期间不要把尺寸变化回钉到旧锚点
+    private var isUserDragging = false
     /// 区分用户隐藏与其他应用占满屏幕时的临时抑制,保证离开全屏后自动恢复。
     private var isSuppressedForCoveredScreen = false
 
@@ -41,7 +43,7 @@ final class FloatingPanelController {
         )
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
-        panel.isMovableByWindowBackground = true // 面板任意处可拖动
+        panel.isMovableByWindowBackground = true // AppKit 子视图仍可拖；SwiftUI 内容由 DraggableHostingView 接管
         panel.backgroundColor = .clear // 透明窗口,圆角材质由 SwiftUI 绘制
         panel.isOpaque = false
         panel.hasShadow = true // 系统级阴影
@@ -49,12 +51,15 @@ final class FloatingPanelController {
         panel.animationBehavior = .none // 尺寸收放由 SwiftUI 动画驱动,窗口本身不做隐式动画
 
         // SwiftUI 内容:preferredContentSize 让内容理想尺寸驱动窗口大小
-        let hostingView = NSHostingView(
+        let hostingView = DraggableHostingView(
             rootView: PanelRoot(viewModel: viewModel) { [weak self] in
                 // 右键菜单「隐藏浮窗」
                 self?.hide()
             }
         )
+        hostingView.onUserDrag = { [weak self] dragging in
+            self?.setUserDragging(dragging)
+        }
         hostingView.sizingOptions = [.preferredContentSize]
         panel.contentView = hostingView
 
@@ -66,6 +71,12 @@ final class FloatingPanelController {
         observePinning()
 
         logger.info("浮窗初始化完成,锚点 x=\(Int(self.anchor.x)) y=\(Int(self.anchor.y))")
+    }
+
+    /// 拖动过程中暂停回钉。松手后的位置由 didMove 写入锚点。
+    private func setUserDragging(_ dragging: Bool) {
+        isUserDragging = dragging
+        logger.info("浮窗拖动态: \(dragging, privacy: .public)")
     }
 
     // MARK: - 显示控制
@@ -140,7 +151,13 @@ final class FloatingPanelController {
         // 内容驱动的尺寸变化 → 回钉右上锚点(否则窗口会朝左下生长)
         center.publisher(for: NSWindow.didResizeNotification, object: panel)
             .sink { [weak self] _ in
-                self?.repinToAnchor()
+                guard let self else { return }
+                // 拖动中 SwiftUI 可能因 preferredContentSize 触发 resize，回钉会把窗口拉回原地。
+                if self.isUserDragging {
+                    self.anchor = NSPoint(x: self.panel.frame.maxX, y: self.panel.frame.maxY)
+                    return
+                }
+                self.repinToAnchor()
             }
             .store(in: &cancellables)
 
@@ -322,5 +339,54 @@ final class FloatingPanelController {
             guard !Task.isCancelled else { return }
             self?.syncPinning()
         }
+    }
+}
+
+/// SwiftUI 的 NSHostingView 覆盖了 mouseDown，不会走到 NSView 的窗口拖动。
+/// 点击和未超过阈值的移动仍交给 SwiftUI（去处理、长按完成）；超过阈值才拖浮窗。
+@MainActor
+final class DraggableHostingView<Content: View>: NSHostingView<Content> {
+    private let logger = Logger(subsystem: "agent-inbox", category: "FloatingPanel")
+    /// 按下位置。nil 表示这次拖动不是从本视图开始的。
+    private var pressOrigin: NSPoint?
+    /// performDrag 会再派发 mouseDragged，用它挡住重入。
+    private var dragActive = false
+    /// true = 开始拖，false = 松手。控制器据此暂停尺寸回钉。
+    var onUserDrag: ((Bool) -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        pressOrigin = event.locationInWindow
+        dragActive = false
+        super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if dragActive { return }
+        guard let pressOrigin else {
+            super.mouseDragged(with: event)
+            return
+        }
+
+        let dx = event.locationInWindow.x - pressOrigin.x
+        let dy = event.locationInWindow.y - pressOrigin.y
+        guard hypot(dx, dy) >= DS.Metrics.windowDragThreshold else {
+            super.mouseDragged(with: event)
+            return
+        }
+
+        guard let window else { return }
+        dragActive = true
+        logger.info("浮窗开始拖动")
+        onUserDrag?(true)
+        window.performDrag(with: event)
+        onUserDrag?(false)
+        dragActive = false
+        self.pressOrigin = nil
+        logger.info("浮窗拖动结束")
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        pressOrigin = nil
+        super.mouseUp(with: event)
     }
 }

@@ -24,16 +24,15 @@ struct MenuContentView: View {
                     Button("待办 · 去处理「\(session.projectName)」") {
                         viewModel.openSession(id: session.id)
                     }
-                } else {
-                    Button("完成「\(session.projectName)」") {
-                        viewModel.completeTodo(id: session.id)
-                    }
+                }
+                Button("完成「\(session.projectName)」") {
+                    viewModel.completeTodo(id: session.id)
                 }
             }
 
-            if viewModel.snapshot.completableTodos.count > 1 {
+            if viewModel.snapshot.todos.count > 1 {
                 Button("全部标记完成") {
-                    if confirmCompleteAllTodos(count: viewModel.snapshot.completableTodos.count) {
+                    if confirmCompleteAllTodos(count: viewModel.snapshot.todos.count) {
                         viewModel.completeAllTodos()
                     }
                 }

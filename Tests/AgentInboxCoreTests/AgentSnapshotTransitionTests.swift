@@ -109,3 +109,26 @@ func multipleRunningSessionsTransitionInTodoOrder() {
     // 保留新快照排序，但排除原本已存在的待办。
     #expect(next.newTodos(comparedTo: previous).map(\.id) == ["codex:second", "codex:first"])
 }
+
+/// 批量完成复用单项入口；等待请求和已交付工作都收起，运行中会话保持不变。
+@Test
+func acknowledgingMixedTodosHidesBothKinds() {
+    let now = Date(timeIntervalSince1970: 10_000)
+    let waiting = makeTransitionSummary(id: "waiting", lifecycleState: .waitingForUser)
+    let completed = makeTransitionSummary(id: "completed", lifecycleState: .completed, taskCompletedAt: now)
+    let running = makeTransitionSummary(id: "running", lifecycleState: .running)
+    var state = PersistedState()
+    for session in [waiting, completed] {
+        state.acknowledgeTodo(session)
+    }
+    let snapshot = AgentStatusResolver().resolve(
+        summaries: [waiting, completed, running],
+        completedSessionIDs: state.completedSessionIDs,
+        acknowledgedRequests: state.acknowledgedRequests,
+        now: now
+    )
+    #expect(snapshot.todos.isEmpty)
+    #expect(snapshot.running == [running])
+    #expect(state.completedSessionIDs == [completed.id])
+    #expect(state.acknowledgedRequests.keys.sorted() == [waiting.id])
+}

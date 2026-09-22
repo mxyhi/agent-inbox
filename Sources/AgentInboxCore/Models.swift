@@ -245,6 +245,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
     public let firstPrompt: String?
     /// 当前首个未回答问题，供待办卡片直接展示需要处理的内容。
     public let pendingQuestion: String?
+    /// 当前待处理请求的稳定标识；普通日志追加不能改变它。
+    public let pendingRequestID: String?
 
     public init(
         provider: AgentProvider = .codex,
@@ -257,7 +259,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
         taskCompletedAt: Date?,
         lastAgentMessage: String?,
         firstPrompt: String? = nil,
-        pendingQuestion: String? = nil
+        pendingQuestion: String? = nil,
+        pendingRequestID: String? = nil
     ) {
         self.provider = provider
         self.sessionID = sessionID
@@ -270,6 +273,12 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
         self.lastAgentMessage = lastAgentMessage
         self.firstPrompt = firstPrompt
         self.pendingQuestion = pendingQuestion
+        self.pendingRequestID = pendingRequestID
+    }
+
+    /// 未提供源请求标识时按问题内容确认，避免把文件更新时间当作新请求。
+    public var requestAcknowledgementID: String {
+        pendingRequestID ?? pendingQuestion ?? "waiting"
     }
 
     /// ForEach / 完成集合唯一键:`provider:sessionID`
@@ -318,17 +327,20 @@ public struct AgentSnapshot: Equatable, Sendable {
 
     /// 已观察的会话进入待办，或待回复与待确认互相切换时触发提醒。
     /// 直接从空快照发现的历史待办不会触发启动通知。
-    public func newTodos(comparedTo previous: AgentSnapshot) -> [SessionSummary] {
+    public func newTodos(
+        comparedTo previous: AgentSnapshot,
+        acknowledgedRequests: [String: String] = [:]
+    ) -> [SessionSummary] {
         let previouslyRunningIDs = Set(previous.running.map(\.id))
         return todos.filter { session in
             previouslyRunningIDs.contains(session.id)
-                || previous.todos.contains { $0.id == session.id && $0.lifecycleState != session.lifecycleState }
+                || previous.todos.contains {
+                    $0.id == session.id && ($0.lifecycleState != session.lifecycleState
+                        || $0.pendingRequestID != session.pendingRequestID)
+                }
+                // 已收起的请求被新请求或交付替代后，再次提醒；重复快照不重复通知。
+                || (acknowledgedRequests[session.id] != nil && !previous.todos.contains { $0.id == session.id })
         }
-    }
-
-    /// 只有工作已结束的待办可以直接标记完成；待回复必须回到会话实际处理。
-    public var completableTodos: [SessionSummary] {
-        todos.filter { $0.lifecycleState == .completed }
     }
 }
 
@@ -476,6 +488,8 @@ public struct NetworkProxyConfig: Codable, Equatable, Sendable {
 public struct PersistedState: Codable, Equatable, Sendable {
     public var pinMode: PinMode
     public var completedSessionIDs: Set<String>
+    /// 每个会话最后确认的请求；与工作交付的确认分开保存，不回答源会话。
+    public var acknowledgedRequests: [String: String]
     /// 本应用开始跟踪 Codex 的时间;此前已完成的历史 rollout 不进入待办
     public var trackingStartedAt: Date
     /// nil = 从未拖动过,使用默认右上角位置
@@ -490,6 +504,7 @@ public struct PersistedState: Codable, Equatable, Sendable {
     public init(
         pinMode: PinMode = .todoOnly,
         completedSessionIDs: Set<String> = [],
+        acknowledgedRequests: [String: String] = [:],
         trackingStartedAt: Date = Date(),
         panelAnchor: PanelAnchor? = nil,
         promptFilterRules: [PromptFilterRule] = [],
@@ -498,10 +513,20 @@ public struct PersistedState: Codable, Equatable, Sendable {
     ) {
         self.pinMode = pinMode
         self.completedSessionIDs = completedSessionIDs
+        self.acknowledgedRequests = acknowledgedRequests
         self.trackingStartedAt = trackingStartedAt
         self.panelAnchor = panelAnchor
         self.promptFilterRules = promptFilterRules
         self.openSessionConfig = openSessionConfig
         self.updateProxyConfig = updateProxyConfig
+    }
+
+    /// 单个和批量完成共用此入口：等待态仅确认当前请求，交付态确认会话。
+    public mutating func acknowledgeTodo(_ session: SessionSummary) {
+        if session.lifecycleState == .waitingForUser {
+            acknowledgedRequests[session.id] = session.requestAcknowledgementID
+        } else if session.lifecycleState == .completed {
+            completedSessionIDs.insert(session.id)
+        }
     }
 }

@@ -307,7 +307,8 @@ public actor CodexSessionMonitor {
             taskCompletedAt: visible.taskCompletedAt,
             lastAgentMessage: visible.lastAgentMessage,
             firstPrompt: head.firstPrompt, // head 扫描出的首个 user_message(清洗截断后)
-            pendingQuestion: visible.unansweredQuestions.first
+            pendingQuestion: visible.unansweredQuestions.first?.title,
+            pendingRequestID: visible.pendingRequestID
         )
         return CachedEntry(modifiedAt: modifiedAt, summary: summary, fileNumber: fileNumber, fileSize: size, state: state)
     }

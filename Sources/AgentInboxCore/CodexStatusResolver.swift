@@ -26,6 +26,7 @@ public struct AgentStatusResolver: Sendable {
     public func resolve(
         summaries: [SessionSummary],
         completedSessionIDs: Set<String>,
+        acknowledgedRequests: [String: String] = [:],
         promptFilterRules: [PromptFilterRule] = [],
         trackingStartedAt: Date = .distantPast,
         now: Date = Date()
@@ -33,6 +34,7 @@ public struct AgentStatusResolver: Sendable {
         let waiting = summaries
             .filter {
                 $0.lifecycleState == .waitingForUser
+                    && acknowledgedRequests[$0.id] != $0.requestAcknowledgementID
                     && now.timeIntervalSince($0.modifiedAt) <= todoRetentionInterval
             }
             .sorted { $0.modifiedAt > $1.modifiedAt }
@@ -57,7 +59,7 @@ public struct AgentStatusResolver: Sendable {
         return AgentSnapshot(
             todos: waiting + todos,
             running: running,
-            hasCompletedHistory: !completedSessionIDs.isEmpty
+            hasCompletedHistory: !completedSessionIDs.isEmpty || !acknowledgedRequests.isEmpty
         )
     }
 
