@@ -252,6 +252,7 @@ func monitorClearsOnlyAnsweredAsyncQuestion() async throws {
 
     let summary = try #require(await CodexSessionMonitor(sessionsRoot: root).scan().first)
     #expect(summary.lifecycleState == .waitingForUser)
+    #expect(summary.pendingQuestion == "第二个问题")
 }
 
 @Test

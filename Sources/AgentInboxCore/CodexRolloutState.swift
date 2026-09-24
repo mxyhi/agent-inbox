@@ -111,6 +111,14 @@ struct CodexRolloutState {
             taskCompletedAt = nil
             lastAgentMessage = nil
         case "exec_approval_request", "apply_patch_approval_request", "request_permissions", "request_user_input", "elicitation_request":
+            // 同一会话只有一条待办。新的审批替换尚未回答的问题，避免旧问题继续占着卡片。
+            if !unansweredQuestions.isEmpty {
+                let previousCount = unansweredQuestions.count
+                Self.logger.info(
+                    "新的审批请求替换同一会话的旧问题: previous=\(previousCount, privacy: .public)"
+                )
+                unansweredQuestions.removeAll()
+            }
             lifecycle = .waitingForUser
             waitingRequestID = "\(offset):\(event.timestamp ?? "")"
         case "task_complete", "turn_complete":
@@ -125,12 +133,30 @@ struct CodexRolloutState {
         case "item_completed":
             guard let item = payload.item else { return }
             if item.type == "AgentMessage", item.delivery == "async" {
-                for (index, title) in (item.questions?.compactMap(\.title) ?? []).enumerated()
-                    where !title.isEmpty && !unansweredQuestions.contains(where: { $0.title == title }) {
-                    unansweredQuestions.append(PendingQuestion(
+                let incoming: [PendingQuestion] = (item.questions?.compactMap(\.title) ?? []).enumerated().compactMap { index, title in
+                    guard !title.isEmpty else { return nil }
+                    return PendingQuestion(
                         id: "\(offset):\(index):\(event.timestamp ?? "")",
                         title: title
-                    ))
+                    )
+                }
+                guard !incoming.isEmpty else { return }
+                // ponytail: 文案相同视为同一次请求，保留原标识。Codex 若用相同标题发出新的一次提问，再按事件偏移区分。
+                if incoming.map(\.title) == unansweredQuestions.map(\.title) {
+                    return
+                }
+                if !unansweredQuestions.isEmpty || lifecycle == .waitingForUser {
+                    let previousCount = unansweredQuestions.count
+                    let nextCount = incoming.count
+                    Self.logger.info(
+                        "新问题替换同一会话的旧待办: previous=\(previousCount, privacy: .public) next=\(nextCount, privacy: .public)"
+                    )
+                }
+                unansweredQuestions = incoming
+                // 问题是覆盖层。底下若是更早的审批，回答后不能把那条旧请求找回来。
+                if lifecycle == .waitingForUser {
+                    lifecycle = taskCompletedAt == nil ? .running : .completed
+                    waitingRequestID = nil
                 }
             } else if item.type == "UserMessage" {
                 consumeAnswer(item.content?.compactMap(\.text).joined(separator: "\n"))

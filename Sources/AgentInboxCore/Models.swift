@@ -243,7 +243,7 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
     public let lastAgentMessage: String?
     /// 焦点卡「问」:首个用户提示词(已清洗截断);nil = 未捕获
     public let firstPrompt: String?
-    /// 当前首个未回答问题，供待办卡片直接展示需要处理的内容。
+    /// 当前待办要展示的问题。同一会话只保留最新一次请求。
     public let pendingQuestion: String?
     /// 当前待处理请求的稳定标识；普通日志追加不能改变它。
     public let pendingRequestID: String?

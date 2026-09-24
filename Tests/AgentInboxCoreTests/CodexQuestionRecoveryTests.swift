@@ -38,19 +38,53 @@ func questionSurvivesLogGrowthAndRestart(incremental: Bool) async throws {
     #expect(await CodexSessionMonitor(sessionsRoot: fixture.root).scan().first?.lifecycleState == .completed)
 }
 
-/// 重复收到某题回答只消费该题，剩余问题必须继续作为待办展示。
+/// 后到的问题替换旧问题。回答已经不在当前请求里的旧题，不能把新问题清掉。
 @Test
-func duplicateAnswerDoesNotDismissAnotherQuestion() async throws {
+func laterQuestionReplacesEarlierQuestion() async throws {
     let fixture = try QuestionRollout()
     defer { fixture.remove() }
     try fixture.append(QuestionRollout.question)
-    try fixture.append(QuestionRollout.question.replacingOccurrences(of: "继续吗？", with: "第二个问题"))
     let monitor = CodexSessionMonitor(sessionsRoot: fixture.root)
-    #expect(await monitor.scan().first?.pendingQuestion == "继续吗？")
+    let first = try #require(await monitor.scan().first)
+    #expect(first.pendingQuestion == "继续吗？")
+    try fixture.append(QuestionRollout.question.replacingOccurrences(of: "继续吗？", with: "第二个问题"))
+    let replaced = try #require(await monitor.scanChangedPaths([fixture.file.path]).first)
+    #expect(replaced.pendingQuestion == "第二个问题")
+    #expect(replaced.pendingRequestID != first.pendingRequestID)
     try fixture.append(QuestionRollout.answer + QuestionRollout.answer)
     let summary = try #require(await monitor.scanChangedPaths([fixture.file.path]).first)
     #expect(summary.lifecycleState == .waitingForUser)
     #expect(summary.pendingQuestion == "第二个问题")
+}
+
+/// 后到的审批替换尚未回答的问题，卡片不再展示旧问题。
+@Test
+func laterApprovalReplacesUnansweredQuestion() async throws {
+    let fixture = try QuestionRollout()
+    defer { fixture.remove() }
+    try fixture.append(QuestionRollout.question)
+    let monitor = CodexSessionMonitor(sessionsRoot: fixture.root)
+    let first = try #require(await monitor.scan().first)
+    try fixture.append("{\"type\":\"event_msg\",\"payload\":{\"type\":\"exec_approval_request\"}}\n")
+    let replaced = try #require(await monitor.scanChangedPaths([fixture.file.path]).first)
+    #expect(replaced.lifecycleState == .waitingForUser)
+    #expect(replaced.pendingQuestion == nil)
+    #expect(replaced.pendingRequestID != first.pendingRequestID)
+}
+
+/// 回答新问题后，不能把被它替换掉的审批再变回待办。
+@Test
+func answeredQuestionDoesNotRestoreReplacedApproval() async throws {
+    let fixture = try QuestionRollout()
+    defer { fixture.remove() }
+    try fixture.append(QuestionRollout.completion)
+    try fixture.append("{\"type\":\"event_msg\",\"payload\":{\"type\":\"exec_approval_request\"}}\n")
+    try fixture.append(QuestionRollout.question)
+    try fixture.append(QuestionRollout.answer)
+    let summary = try #require(await CodexSessionMonitor(sessionsRoot: fixture.root).scan().first)
+    #expect(summary.lifecycleState == .completed)
+    #expect(summary.pendingQuestion == nil)
+    #expect(summary.pendingRequestID == nil)
 }
 
 /// 中断或回滚会结束当前待处理请求，全历史恢复不能复活已取消的问题。
