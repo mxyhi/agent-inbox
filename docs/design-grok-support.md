@@ -41,7 +41,7 @@ Agent Inbox 只扫描 `~/.codex/sessions/**/rollout-*.jsonl`：
 ### 非目标
 
 - 不在 Inbox 内 resume/attach Grok TUI（打开仍走 cwd / 自定义命令）。
-- 不解析 subagent 内部细节为独立待办（子会话若有独立 dir，按普通会话处理）。
+- 不把 subagent 当成独立待办。即便子会话有同级目录，也归回父对话。
 - 不做跨机/远程会话。
 - 不改通知/置顶/过滤规则的产品语义，只让其吃统一摘要。
 

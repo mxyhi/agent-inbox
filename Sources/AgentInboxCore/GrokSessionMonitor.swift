@@ -15,6 +15,7 @@ import OSLog
 /// - turn_ended(completed) → completed(待办):进程仍活=等下一步提示;进程已退=会话收尾待确认
 /// - mid-turn 但 pid 已死(崩溃/僵尸) → unknown,不展示
 /// - aborted / 空会话 → 不进待办
+/// - `subagents/` 下的子会话属于父对话，不单独进待办
 public actor GrokSessionMonitor {
     /// 缓存指纹:summary/events mtime + pid 存活位,任一变化则重解析
     private struct CacheFingerprint: Equatable {
@@ -116,6 +117,9 @@ public actor GrokSessionMonitor {
 
     /// key = session 目录 path
     private var cache: [String: CachedEntry] = [:]
+    /// 已经确认属于父对话的子会话 id。新待办替换的是父对话那一条。
+    private var subagentIDs: Set<String> = []
+    private var lastLoggedSkippedSubagentCount = 0
 
     public init(
         sessionsRoot: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -234,6 +238,9 @@ public actor GrokSessionMonitor {
                 continue
             }
 
+            if let childID = subagentID(in: url) {
+                noteSubagent(childID)
+            }
             if let sessionDir = sessionDirectory(containing: url) {
                 sessionDirs.insert(sessionDir.path)
             } else if isLikelyDirectoryEvent(url, fileManager: fileManager) {
@@ -286,7 +293,11 @@ public actor GrokSessionMonitor {
         }
 
         var dirs: [SessionDirInfo] = []
+        var seenSubagents = subagentIDs
         for case let url as URL in enumerator {
+            if let childID = subagentID(in: url) {
+                seenSubagents.insert(childID)
+            }
             guard url.lastPathComponent == "summary.json" else { continue }
             do {
                 let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
@@ -316,15 +327,60 @@ public actor GrokSessionMonitor {
             }
         }
 
+        // 先丢掉子会话再截断。否则 80 个新子会话会把父对话挤出窗口，列表里只剩重复待办。
+        let conversations = dirs.filter { dir in
+            if seenSubagents.contains(dir.sessionID) || isSubagentAudience(at: dir.url) {
+                seenSubagents.insert(dir.sessionID)
+                return false
+            }
+            return true
+        }
+        let skipped = dirs.count - conversations.count
+        if skipped > 0, skipped != lastLoggedSkippedSubagentCount {
+            logger.info("子会话不单独进入待办: skipped=\(skipped, privacy: .public)")
+            lastLoggedSkippedSubagentCount = skipped
+        }
+        subagentIDs = seenSubagents
+
         // 按 summary/events 较新者排序
         return Array(
-            dirs.sorted { lhs, rhs in
+            conversations.sorted { lhs, rhs in
                 let left = max(lhs.summaryModifiedAt, lhs.eventsModifiedAt ?? .distantPast)
                 let right = max(rhs.summaryModifiedAt, rhs.eventsModifiedAt ?? .distantPast)
                 return left > right
             }
             .prefix(maxFiles)
         )
+    }
+
+    /// `.../subagents/<session-id>/...` 的下一段就是子会话 id。
+    private func subagentID(in url: URL) -> String? {
+        let parts = url.pathComponents
+        guard let index = parts.lastIndex(of: "subagents") else { return nil }
+        let childIndex = parts.index(after: index)
+        guard childIndex < parts.endIndex else { return nil }
+        let child = parts[childIndex]
+        guard !child.isEmpty, child != "summary.json" else { return nil }
+        return child
+    }
+
+    /// 文件头的 audience。子会话结果回到父对话，不占第二条待办。
+    private func isSubagentAudience(at sessionDir: URL) -> Bool {
+        let url = sessionDir.appending(path: "prompt_context.json")
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let prefix = try? handle.read(upToCount: 512),
+              let text = String(data: prefix, encoding: .utf8) else { return false }
+        return text.contains("\"audience\": \"subagent\"") || text.contains("\"audience\":\"subagent\"")
+    }
+
+    private func noteSubagent(_ sessionID: String) {
+        subagentIDs.insert(sessionID)
+        let removed = cache.filter { $0.value.summary.sessionID == sessionID }.map(\.key)
+        for path in removed {
+            cache.removeValue(forKey: path)
+            logger.info("子会话移出待办: \(sessionID, privacy: .public)")
+        }
     }
 
     // MARK: - active_sessions + pid
@@ -651,6 +707,11 @@ public actor GrokSessionMonitor {
             let eventsMtime = try? eventsURL.resourceValues(forKeys: [.contentModificationDateKey])
                 .contentModificationDate
             let sessionID = sessionDir.lastPathComponent
+            // 父对话的子会话即使写成同级目录，也只更新父对话那一条待办。
+            if subagentIDs.contains(sessionID) || isSubagentAudience(at: sessionDir) {
+                noteSubagent(sessionID)
+                return false
+            }
             let processAlive = aliveSessionIDs.contains(sessionID)
             let fingerprint = CacheFingerprint(
                 summaryModifiedAt: summaryMtime,

@@ -211,6 +211,57 @@ func grokMonitorIgnoresZombiePidInActiveSessions() async throws {
     #expect(summary.lifecycleState == .unknown)
 }
 
+/// 父对话派出去的子会话和父对话共用项目名，但不能各占一条待办。
+@Test
+func grokSubagentsStayOnTheParentConversation() async throws {
+    let root = try makeGrokFixtureRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let now = Date()
+    let cwd = "/tmp/grok-parent-conversation"
+
+    func completedSession(_ sessionID: String, ago: TimeInterval) throws -> URL {
+        let ended = iso8601(now.addingTimeInterval(-ago))
+        return try writeGrokSession(
+            root: root,
+            sessionID: sessionID,
+            cwd: cwd,
+            summaryBody: """
+            {"info":{"id":"\(sessionID)","cwd":"\(cwd)"},"created_at":"\(ended)","updated_at":"\(ended)","last_active_at":"\(ended)","generated_title":"\(sessionID)","num_chat_messages":4}
+            """,
+            eventsBody: """
+            {"ts":"\(ended)","type":"turn_ended","outcome":"completed"}
+            """,
+            updatesBody: """
+            {"method":"session/update","params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"继续任务直到完成"}}}}
+            """
+        )
+    }
+
+    let parentDir = try completedSession("parent-conversation", ago: 30)
+    let linkedDir = try completedSession("linked-subagent", ago: 5)
+    let audienceDir = try completedSession("audience-subagent", ago: 1)
+    _ = try completedSession("other-conversation", ago: 20)
+
+    let link = parentDir.appending(path: "subagents").appending(path: "linked-subagent")
+    try FileManager.default.createDirectory(at: link, withIntermediateDirectories: true)
+    try Data(#"{"id":"linked-subagent"}"#.utf8).write(to: link.appending(path: "meta.json"))
+    try Data(#"{"audience":"subagent"}"#.utf8).write(to: audienceDir.appending(path: "prompt_context.json"))
+
+    let activeFile = try writeActiveSessions(root: root, records: [])
+    let monitor = GrokSessionMonitor(sessionsRoot: root, activeSessionsFile: activeFile)
+    let summaries = await monitor.scan()
+    #expect(Set(summaries.map(\.sessionID)) == ["parent-conversation", "other-conversation"])
+
+    // 子会话文件继续更新时，也不能再插回一条待办。
+    let later = iso8601(now)
+    try """
+    {"info":{"id":"linked-subagent","cwd":"\(cwd)"},"created_at":"\(later)","updated_at":"\(later)","last_active_at":"\(later)","generated_title":"linked-subagent","num_chat_messages":8}
+    """.write(to: linkedDir.appending(path: "summary.json"), atomically: true, encoding: .utf8)
+    let refreshed = await monitor.scanChangedPaths([linkedDir.appending(path: "summary.json").path])
+    #expect(Set(refreshed.map(\.sessionID)) == ["parent-conversation", "other-conversation"])
+}
+
 @Test
 func sessionIdentityNormalizesLegacyCompletedIDs() {
     #expect(SessionIdentity.normalizeCompletedID("abc") == "codex:abc")
