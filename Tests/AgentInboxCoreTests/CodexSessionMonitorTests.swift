@@ -402,6 +402,71 @@ func monitorIncrementallyParsesChangedRolloutOnly() async throws {
     #expect(second.lastAgentMessage == "second-v1")
 }
 
+@Test
+func continuationRolloutHidesCompletedParentWithSameSessionID() async throws {
+    let root = try makeTemporarySessionsRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let parentMtime: TimeInterval = 1_783_188_000
+    let childMtime: TimeInterval = 1_783_188_400
+    try writeRollout(
+        root: root,
+        name: "rollout-2026-07-04T18-00-00-thread.jsonl",
+        body: """
+        {"timestamp":"2026-07-04T18:00:00.000Z","type":"session_meta","payload":{"id":"thread-1","timestamp":"2026-07-04T18:00:00.000Z","cwd":"/tmp/sc-entangled"}}
+        {"timestamp":"2026-07-04T18:00:30.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"父文件已结束"}}
+        """,
+        mtimeEpoch: parentMtime
+    )
+    let child = try writeRollout(
+        root: root,
+        name: "rollout-2026-07-04T18-06-00-thread_child.jsonl",
+        body: """
+        {"timestamp":"2026-07-04T18:06:00.000Z","type":"session_meta","payload":{"id":"thread-1","timestamp":"2026-07-04T18:06:00.000Z","cwd":"/tmp/sc-entangled"}}
+        {"timestamp":"2026-07-04T18:06:01.000Z","type":"event_msg","payload":{"type":"task_started"}}
+        """,
+        mtimeEpoch: childMtime
+    )
+
+    let monitor = CodexSessionMonitor(sessionsRoot: root)
+    let summaries = await monitor.scan()
+    #expect(summaries.count == 1)
+    let summary = try #require(summaries.first)
+    #expect(summary.sessionID == "thread-1")
+    #expect(summary.lifecycleState == .running)
+    #expect(
+        URL(filePath: summary.filePath).resolvingSymlinksInPath()
+            == child.resolvingSymlinksInPath()
+    )
+
+    // 父文件的完成态不能和续写同时出现，否则运行中的写入会反复触发待办通知。
+    let snapshot = AgentStatusResolver().resolve(
+        summaries: summaries,
+        completedSessionIDs: [],
+        now: Date(timeIntervalSince1970: childMtime)
+    )
+    #expect(snapshot.running.map(\.id) == ["codex:thread-1"])
+    #expect(snapshot.todos.isEmpty)
+
+    try writeRollout(
+        root: root,
+        name: child.lastPathComponent,
+        body: """
+        {"timestamp":"2026-07-04T18:06:00.000Z","type":"session_meta","payload":{"id":"thread-1","timestamp":"2026-07-04T18:06:00.000Z","cwd":"/tmp/sc-entangled"}}
+        {"timestamp":"2026-07-04T18:06:01.000Z","type":"event_msg","payload":{"type":"task_started"}}
+        {"timestamp":"2026-07-04T18:06:20.000Z","type":"event_msg","payload":{"type":"agent_message","message":"still working"}}
+        """,
+        mtimeEpoch: childMtime + 30
+    )
+    let changed = await monitor.scanChangedPaths([child.path])
+    #expect(changed.count == 1)
+    #expect(changed.first?.lifecycleState == .running)
+    #expect(
+        URL(filePath: changed[0].filePath).resolvingSymlinksInPath()
+            == child.resolvingSymlinksInPath()
+    )
+}
+
 // MARK: - fixture 辅助
 
 /// 创建带 YYYY/MM/DD 层级的临时 sessions 根目录

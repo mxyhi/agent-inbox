@@ -74,6 +74,8 @@ public actor CodexSessionMonitor {
 
     /// mtime 缓存,key 为文件路径;actor 隔离保证并发安全
     private var cache: [String: CachedEntry] = [:]
+    /// 已经打过「丢弃旧 rollout」日志的路径。续写追加会反复扫描，不能每轮都打。
+    private var loggedDroppedRollouts: Set<String> = []
 
     public init(
         sessionsRoot: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".codex/sessions"),
@@ -133,7 +135,8 @@ public actor CodexSessionMonitor {
         cache = cache.filter { alivePaths.contains($0.key) }
 
         logger.debug("Scanned \(files.count, privacy: .public) rollout files, cache hits \(cacheHits, privacy: .public)")
-        return summaries
+        // recentRolloutFiles 已按 mtime 降序，先出现的是当前这份。
+        return currentRollouts(summaries)
     }
 
     /// 增量扫描 FSEvents 命中的路径:只重读变更的 rollout 文件;目录级事件或空缓存时回退 full scan
@@ -149,6 +152,7 @@ public actor CodexSessionMonitor {
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: sessionsRoot.path) else {
             cache.removeAll()
+            loggedDroppedRollouts.removeAll()
             logger.info("Codex sessions root missing during incremental scan: \(self.sessionsRoot.path, privacy: .public)")
             return []
         }
@@ -245,8 +249,34 @@ public actor CodexSessionMonitor {
     }
 
     private func cachedSummaries() -> [SessionSummary] {
-        Array(cache.values.sorted { $0.modifiedAt > $1.modifiedAt }.prefix(maxFiles))
+        let newestFirst = cache.values
+            .sorted { $0.modifiedAt > $1.modifiedAt }
             .map(\.summary)
+        return Array(currentRollouts(newestFirst).prefix(maxFiles))
+    }
+
+    /// Codex 续写文件名是 `rollout-…-<threadId>_<childId>.jsonl`，但 session_meta.id 仍是父线程。
+    /// 同一 id 只保留修改时间最新的一份。否则已结束的父文件进待办、续写进运行中，
+    /// 续写每追加一段都改 mtime，新待办判定会把这一次旧完成再报一遍。
+    /// 调用方必须按 modifiedAt 降序传入；先出现的视为当前 rollout。
+    private func currentRollouts(_ summariesNewestFirst: [SessionSummary]) -> [SessionSummary] {
+        var seen = Set<String>()
+        var kept: [SessionSummary] = []
+        kept.reserveCapacity(summariesNewestFirst.count)
+        var dropped: Set<String> = []
+        for summary in summariesNewestFirst {
+            guard seen.insert(summary.id).inserted else {
+                dropped.insert(summary.filePath)
+                continue
+            }
+            kept.append(summary)
+        }
+        // 同一旧文件会在每次续写追加时再次落选，只在第一次丢弃时记日志。
+        for path in dropped.subtracting(loggedDroppedRollouts) {
+            logger.info("丢弃同一会话的旧 rollout: drop=\(path, privacy: .public)")
+        }
+        loggedDroppedRollouts = dropped
+        return kept
     }
 
     private func trimCacheToMaxFiles() {
