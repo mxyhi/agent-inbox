@@ -468,6 +468,53 @@ func continuationRolloutHidesCompletedParentWithSameSessionID() async throws {
     )
 }
 
+/// Codex 子线程有自己的 rollout 和 id，但 thread_source 标明它属于父对话。
+@Test
+func childThreadRolloutDoesNotBecomeItsOwnTodo() async throws {
+    let root = try makeTemporarySessionsRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    try writeRollout(
+        root: root,
+        name: "rollout-2026-07-04T18-00-00-parent.jsonl",
+        body: """
+        {"timestamp":"2026-07-04T18:00:00.000Z","type":"session_meta","payload":{"id":"parent-thread","session_id":"parent-thread","thread_source":"user","cwd":"/tmp/same-project"}}
+        {"timestamp":"2026-07-04T18:00:30.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"父对话结束"}}
+        """,
+        mtimeEpoch: 1_783_188_000
+    )
+    let child = try writeRollout(
+        root: root,
+        name: "rollout-2026-07-04T18-06-00-child.jsonl",
+        body: """
+        {"timestamp":"2026-07-04T18:06:00.000Z","type":"session_meta","payload":{"id":"child-thread","session_id":"parent-thread","parent_thread_id":"parent-thread","thread_source":"subagent","cwd":"/tmp/same-project"}}
+        {"timestamp":"2026-07-04T18:06:20.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"子线程结束"}}
+        """,
+        mtimeEpoch: 1_783_188_400
+    )
+    try writeRollout(
+        root: root,
+        name: "rollout-2026-07-04T18-07-00-review.jsonl",
+        body: """
+        {"timestamp":"2026-07-04T18:07:00.000Z","type":"session_meta","payload":{"id":"review-thread","parent_thread_id":"parent-thread","thread_source":"guardian_review","cwd":"/tmp/same-project"}}
+        {"timestamp":"2026-07-04T18:07:10.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"审查结束"}}
+        """,
+        mtimeEpoch: 1_783_188_500
+    )
+
+    let monitor = CodexSessionMonitor(sessionsRoot: root)
+    let summaries = await monitor.scan()
+    #expect(summaries.map(\.sessionID) == ["parent-thread"])
+
+    // 子线程文件继续更新时，也不能再插回一条待办。
+    try """
+    {"timestamp":"2026-07-04T18:06:00.000Z","type":"session_meta","payload":{"id":"child-thread","thread_source":"subagent","cwd":"/tmp/same-project"}}
+    {"timestamp":"2026-07-04T18:08:00.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"又写了一段"}}
+    """.write(to: child, atomically: true, encoding: .utf8)
+    let changed = await monitor.scanChangedPaths([child.path])
+    #expect(changed.map(\.sessionID) == ["parent-thread"])
+}
+
 // MARK: - fixture 辅助
 
 /// 创建带 YYYY/MM/DD 层级的临时 sessions 根目录

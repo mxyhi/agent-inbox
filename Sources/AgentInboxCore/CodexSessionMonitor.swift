@@ -76,6 +76,8 @@ public actor CodexSessionMonitor {
     private var cache: [String: CachedEntry] = [:]
     /// 已经打过「丢弃旧 rollout」日志的路径。续写追加会反复扫描，不能每轮都打。
     private var loggedDroppedRollouts: Set<String> = []
+    /// 上次记录的子线程跳过数。数量不变时不重复打日志。
+    private var lastLoggedSkippedChildThreads = 0
 
     public init(
         sessionsRoot: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".codex/sessions"),
@@ -179,7 +181,15 @@ public actor CodexSessionMonitor {
 
         var reparsed = 0
         for path in rolloutPaths {
-            if updateCachedRollout(at: URL(filePath: path), fileManager: fileManager) {
+            let url = URL(filePath: path)
+            // 子线程文件更新不能再插回一条待办。
+            if isChildThreadRollout(at: url) {
+                if cache.removeValue(forKey: path) != nil {
+                    logger.info("Codex 子线程移出待办: \(url.lastPathComponent, privacy: .public)")
+                }
+                continue
+            }
+            if updateCachedRollout(at: url, fileManager: fileManager) {
                 reparsed += 1
             }
         }
@@ -219,7 +229,39 @@ public actor CodexSessionMonitor {
             }
         }
 
-        return Array(files.sorted { $0.modifiedAt > $1.modifiedAt }.prefix(maxFiles))
+        // 先丢掉子线程再截断。否则一串新的 subagent rollout 会占满最近窗口，父对话进不了列表。
+        var kept: [(url: URL, modifiedAt: Date)] = []
+        kept.reserveCapacity(min(maxFiles, files.count))
+        var skipped = 0
+        for file in files.sorted(by: { $0.modifiedAt > $1.modifiedAt }) {
+            if isChildThreadRollout(at: file.url) {
+                skipped += 1
+                continue
+            }
+            kept.append(file)
+            if kept.count == maxFiles { break }
+        }
+        if skipped > 0, skipped != lastLoggedSkippedChildThreads {
+            logger.info("Codex 子线程不单独进入待办: skipped=\(skipped, privacy: .public)")
+            lastLoggedSkippedChildThreads = skipped
+        }
+        return kept
+    }
+
+    /// `thread_source` 在 `base_instructions` 之前。subagent / guardian_review 属于父对话。
+    private func isChildThreadRollout(at url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let prefix = try? handle.read(upToCount: 2048) else { return false }
+        let marker = Data("\"base_instructions\"".utf8)
+        let head = prefix.range(of: marker).map { prefix.prefix(upTo: $0.lowerBound) } ?? prefix
+        for value in ["subagent", "guardian_review"] {
+            if head.range(of: Data("\"thread_source\":\"\(value)\"".utf8)) != nil
+                || head.range(of: Data("\"thread_source\": \"\(value)\"".utf8)) != nil {
+                return true
+            }
+        }
+        return false
     }
 
     private func updateCachedRollout(at url: URL, fileManager: FileManager) -> Bool {
