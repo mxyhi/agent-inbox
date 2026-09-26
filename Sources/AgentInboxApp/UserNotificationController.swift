@@ -7,7 +7,11 @@ private let userNotificationLogger = Logger(subsystem: "agent-inbox", category: 
 /// 现代系统通知入口:按真实通知事件申请权限，并保证前台 accessory app 仍展示 banner。
 @MainActor
 final class UserNotificationController: NSObject {
+    nonisolated static let sessionIDUserInfoKey = "agent-inbox.session-id"
+
     private let center: UNUserNotificationCenter?
+    /// 通知点击后由 AppViewModel 处理，参数为通知携带的会话复合 ID。
+    var onNotificationSelected: ((String?) -> Void)?
 
     init(center: UNUserNotificationCenter? = nil) {
         if let center {
@@ -31,7 +35,8 @@ final class UserNotificationController: NSObject {
     func show(
         title: String,
         message: String,
-        threadIdentifier: String = "agent-inbox-errors"
+        threadIdentifier: String = "agent-inbox-errors",
+        sessionID: String? = nil
     ) {
         guard let center else {
             showFallbackAlert(title: title, message: message)
@@ -51,6 +56,9 @@ final class UserNotificationController: NSObject {
                 content.sound = .default
                 content.threadIdentifier = threadIdentifier
                 content.interruptionLevel = .active
+                if let sessionID, !sessionID.isEmpty {
+                    content.userInfo = [Self.sessionIDUserInfoKey: sessionID]
+                }
 
                 let identifier = UUID().uuidString
                 let request = UNNotificationRequest(
@@ -107,5 +115,24 @@ extension UserNotificationController: UNUserNotificationCenterDelegate {
     ) {
         userNotificationLogger.debug("前台系统通知准备展示")
         completionHandler([.banner, .list, .sound])
+    }
+
+    /// 用户点击通知时，系统只会唤醒 accessory app；必须把通知中的会话 ID
+    /// 转交给 ViewModel，才能继续打开原会话而不是停在 Inbox 浮窗。
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let sessionID = response.notification.request.content.userInfo[
+            Self.sessionIDUserInfoKey
+        ] as? String
+        Task { @MainActor [weak self] in
+            self?.onNotificationSelected?(sessionID)
+        }
+        userNotificationLogger.info(
+            "收到通知点击: sessionIDSet=\(sessionID != nil, privacy: .public)"
+        )
+        completionHandler()
     }
 }

@@ -26,6 +26,7 @@ final class AppViewModel: ObservableObject {
     private var watcher: SessionsWatcher?
     private var pendingChangedPaths: Set<String> = []
     private var hasLoadedInitialSnapshot = false
+    private var pendingNotificationSessionID: String?
 
     init(
         monitor: CompositeSessionMonitor = CompositeSessionMonitor(),
@@ -39,6 +40,9 @@ final class AppViewModel: ObservableObject {
         self.stateStore = stateStore
         self.executor = executor
         self.notificationController = notificationController
+        notificationController.onNotificationSelected = { [weak self] sessionID in
+            self?.handleNotificationSelection(sessionID: sessionID)
+        }
     }
 
     // MARK: - 生命周期
@@ -76,6 +80,7 @@ final class AppViewModel: ObservableObject {
         watcher?.start()
 
         await loadInitialSnapshot()
+        openPendingNotificationSessionIfReady()
 
         reconcileTask = Task { [weak self] in
             guard let self else { return }
@@ -134,6 +139,24 @@ final class AppViewModel: ObservableObject {
             logger.error("打开会话失败: \(String(describing: error), privacy: .public)")
             notificationController.show(title: "打开会话失败", message: error.localizedDescription)
         }
+    }
+
+    /// 处理系统通知点击。冷启动时快照可能还没完成首扫，先缓存目标，首扫结束后再打开。
+    func handleNotificationSelection(sessionID: String?) {
+        NSApp.activate(ignoringOtherApps: true)
+
+        guard let sessionID, !sessionID.isEmpty else {
+            logger.info("通知点击未携带会话 ID，仅激活 Agent Inbox")
+            return
+        }
+
+        guard hasSession(id: sessionID) else {
+            pendingNotificationSessionID = sessionID
+            logger.info("通知点击目标等待首扫: \(sessionID, privacy: .public)")
+            return
+        }
+
+        openSession(id: sessionID)
     }
 
     /// 一键完成全部待办(右键菜单/菜单栏)
@@ -441,7 +464,8 @@ final class AppViewModel: ObservableObject {
         notificationController.show(
             title: title,
             message: message,
-            threadIdentifier: "agent-inbox-todos"
+            threadIdentifier: "agent-inbox-todos",
+            sessionID: todos.count == 1 ? todos[0].id : todos.first?.id
         )
         logger.info("新待办通知已请求: count=\(todos.count)")
     }
@@ -457,5 +481,17 @@ final class AppViewModel: ObservableObject {
             running: snapshot.running,
             hasCompletedHistory: snapshot.hasCompletedHistory
         )
+    }
+
+    private func hasSession(id: String) -> Bool {
+        snapshot.todos.contains { $0.id == id } || snapshot.running.contains { $0.id == id }
+    }
+
+    private func openPendingNotificationSessionIfReady() {
+        guard let sessionID = pendingNotificationSessionID, hasSession(id: sessionID) else {
+            return
+        }
+        pendingNotificationSessionID = nil
+        openSession(id: sessionID)
     }
 }
