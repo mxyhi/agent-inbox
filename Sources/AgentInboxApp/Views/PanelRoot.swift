@@ -20,7 +20,7 @@ struct PanelRoot: View {
                     .strokeBorder(DS.Colors.hairline, lineWidth: 0.5)
             )
             .contextMenu { contextMenuItems }
-            // fixedSize:面板取理想尺寸,配合 NSHostingView.sizingOptions 驱动窗口收放
+            // fixedSize:面板取理想尺寸,由浮窗控制器同步窗口尺寸
             .fixedSize()
             .animation(DS.Anim.state, value: viewModel.snapshot)
             // 出现新待办时向 VoiceOver 播报

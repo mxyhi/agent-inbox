@@ -11,7 +11,7 @@ extension Notification.Name {
 
 /// 浮窗控制器 —— 无边框透明面板的生命周期、自适应尺寸与位置持久化
 /// V4 核心机制:
-/// 1. NSHostingView.sizingOptions = .preferredContentSize,SwiftUI 内容尺寸直接驱动窗口收放(胶囊⇄列表);
+/// 1. NSHostingView.sizingOptions = .preferredContentSize 提供 SwiftUI 理想尺寸,由回调显式驱动窗口收放(胶囊⇄列表);
 /// 2. 窗口 resize 后回钉「右上角锚点」,保证收放时视觉上固定在右上角不漂移;
 /// 3. 用户拖动结束后把锚点写入 SQLite,跨启动恢复(补齐 task_plan 里未落地的窗口位置持久化)。
 @MainActor
@@ -50,7 +50,7 @@ final class FloatingPanelController {
         panel.collectionBehavior = [.moveToActiveSpace]
         panel.animationBehavior = .none // 尺寸收放由 SwiftUI 动画驱动,窗口本身不做隐式动画
 
-        // SwiftUI 内容:preferredContentSize 让内容理想尺寸驱动窗口大小
+        // SwiftUI 内容:preferredContentSize 提供理想尺寸;窗口大小由回调显式同步。
         let hostingView = DraggableHostingView(
             rootView: PanelRoot(viewModel: viewModel) { [weak self] in
                 // 右键菜单「隐藏浮窗」
@@ -59,6 +59,10 @@ final class FloatingPanelController {
         )
         hostingView.onUserDrag = { [weak self] dragging in
             self?.setUserDragging(dragging)
+        }
+        hostingView.onContentSizeChange = { [weak self, weak hostingView] in
+            guard let self, let hostingView else { return }
+            self.syncContentSize(hostingView.fittingSize)
         }
         hostingView.sizingOptions = [.preferredContentSize]
         panel.contentView = hostingView
@@ -71,6 +75,18 @@ final class FloatingPanelController {
         observePinning()
 
         logger.info("浮窗初始化完成,锚点 x=\(Int(self.anchor.x)) y=\(Int(self.anchor.y))")
+    }
+
+    /// NSHostingView 的 preferredContentSize 不会自动改变无边框 NSPanel 的 frame。
+    /// 显式调整窗口，避免内容超过初始 300×100pt 后被裁切。
+    private func syncContentSize(_ size: NSSize) {
+        guard size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0,
+              abs(panel.contentRect(forFrameRect: panel.frame).height - size.height) > 0.5
+        else { return }
+
+        panel.setContentSize(size)
+        logger.info("浮窗内容尺寸已同步: width=\(Int(size.width), privacy: .public) height=\(Int(size.height), privacy: .public)")
     }
 
     /// 拖动过程中暂停回钉。松手后的位置由 didMove 写入锚点。
@@ -353,6 +369,15 @@ final class DraggableHostingView<Content: View>: NSHostingView<Content> {
     private var dragActive = false
     /// true = 开始拖，false = 松手。控制器据此暂停尺寸回钉。
     var onUserDrag: ((Bool) -> Void)?
+    /// SwiftUI 内容尺寸变化时通知窗口控制器。
+    var onContentSizeChange: (() -> Void)?
+
+    override func invalidateIntrinsicContentSize() {
+        super.invalidateIntrinsicContentSize()
+        DispatchQueue.main.async { [weak self] in
+            self?.onContentSizeChange?()
+        }
+    }
 
     override func mouseDown(with event: NSEvent) {
         pressOrigin = event.locationInWindow
