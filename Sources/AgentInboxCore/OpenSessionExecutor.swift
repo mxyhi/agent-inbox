@@ -29,6 +29,8 @@ public final class OpenSessionExecutor {
             try executeTerminal(session: session)
         case .vscode:
             try executeVSCode(session: session)
+        case .superconductor:
+            try executeSuperconductor(session: session)
         case .custom:
             try executeCustom(session: session, template: config.customCommand)
         }
@@ -75,6 +77,55 @@ public final class OpenSessionExecutor {
         let command = "code \"\(cwd)\""
         try executeShellCommand(command)
         logger.info("VS Code 打开目录: \(cwd, privacy: .public)")
+    }
+
+    /// Superconductor 选中会话的 worktree，并切换到对应原生对话。
+    private func executeSuperconductor(session: SessionSummary) throws {
+        guard let cwd = session.cwd, !cwd.isEmpty else {
+            logger.warning("SC 打开失败: cwd 缺失")
+            throw OpenSessionError.missingWorkingDirectory
+        }
+
+        guard let executable = superconductorExecutable() else {
+            logger.error("SC 打开失败: 找不到 sc 可执行文件")
+            throw OpenSessionError.superconductorUnavailable
+        }
+
+        try executeProcess(
+            executable: executable,
+            arguments: ["worktree", "open", cwd]
+        )
+
+        let conversationID = "conv:\(session.provider.rawValue):\(session.sessionID)"
+        try executeProcess(
+            executable: executable,
+            arguments: ["chat", "select", conversationID]
+        )
+
+        // 选择操作在后台完成，最后把 SC 主窗口带到前台；避免 --activate 被
+        // agent 运行上下文拒绝，同时保留用户点击后的可见跳转。
+        do {
+            try executeProcess(
+                executable: URL(filePath: "/usr/bin/open"),
+                arguments: ["-b", "engineering.super.app"]
+            )
+        } catch {
+            logger.warning("SC 已完成选择，但前台激活失败: \(String(describing: error), privacy: .public)")
+        }
+        logger.info(
+            "SC 已选中 worktree 与对话: cwd=\(cwd, privacy: .public), conversation=\(conversationID, privacy: .public)"
+        )
+    }
+
+    private func superconductorExecutable() -> URL? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidates = [
+            home.appending(path: ".super.engineering/bin/sc"),
+            home.appending(path: ".superconductor/bin/sc"),
+            URL(filePath: "/opt/homebrew/bin/sc"),
+            URL(filePath: "/usr/local/bin/sc")
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
     /// 执行自定义命令模板
@@ -138,12 +189,45 @@ public final class OpenSessionExecutor {
             throw OpenSessionError.executionFailed(underlying: error)
         }
     }
+
+    private func executeProcess(executable: URL, arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            logger.error("命令执行异常: \(String(describing: error), privacy: .public)")
+            throw OpenSessionError.executionFailed(underlying: error)
+        }
+
+        guard process.terminationStatus == 0 else {
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
+            let command = ([executable.path] + arguments).joined(separator: " ")
+            logger.error("命令执行失败: status=\(process.terminationStatus), stderr=\(errorOutput, privacy: .public)")
+            throw OpenSessionError.commandFailed(
+                command: command,
+                exitCode: Int(process.terminationStatus),
+                stderr: errorOutput
+            )
+        }
+    }
 }
 
 // MARK: - 错误定义
 
 /// 会话打开执行错误
 public enum OpenSessionError: LocalizedError {
+    /// 会话没有工作目录
+    case missingWorkingDirectory
+    /// 找不到 Superconductor CLI
+    case superconductorUnavailable
     /// 自定义命令为空
     case emptyCustomCommand
     /// 命令执行失败（非零退出码）
@@ -153,6 +237,10 @@ public enum OpenSessionError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
+        case .missingWorkingDirectory:
+            return "会话没有可用的工作目录"
+        case .superconductorUnavailable:
+            return "找不到 Superconductor 的 sc 命令"
         case .emptyCustomCommand:
             return "自定义命令不能为空"
         case .commandFailed(let command, let exitCode, let stderr):

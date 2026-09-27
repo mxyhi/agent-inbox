@@ -360,6 +360,7 @@ public enum OpenSessionMethod: String, Codable, CaseIterable, Sendable, Identifi
     case finder       // Finder 中打开目录（默认）
     case terminal     // Terminal.app 中打开
     case vscode       // VS Code 中打开（需已安装 code 命令）
+    case superconductor // Superconductor 中选中 worktree 与对应对话
     case custom       // 自定义 shell 命令
 
     public var id: String { rawValue }
@@ -373,6 +374,8 @@ public enum OpenSessionMethod: String, Codable, CaseIterable, Sendable, Identifi
             "终端"
         case .vscode:
             "VS Code"
+        case .superconductor:
+            "SC"
         case .custom:
             "自定义命令"
         }
@@ -387,6 +390,8 @@ public enum OpenSessionMethod: String, Codable, CaseIterable, Sendable, Identifi
             "在终端中打开工作目录"
         case .vscode:
             "使用 VS Code 打开工作目录"
+        case .superconductor:
+            "在 Superconductor 中选中 worktree 和对应对话"
         case .custom:
             "执行自定义 shell 命令"
         }

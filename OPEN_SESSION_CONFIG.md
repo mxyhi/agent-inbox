@@ -21,6 +21,11 @@ Agent Inbox 支持通过配置自定义如何打开 Codex、Grok、Claude 会话
    - 命令：`code "$cwd"`
    - ⚠️ 需要先安装 VS Code 的 `code` 命令行工具
 
+4. **SC**
+   - 通过 `sc worktree open` 选中会话的 worktree
+   - 通过 `sc chat select` 切换到对应的原生对话
+   - 需要已安装 Superconductor CLI
+
 ### 自定义命令
 
 选择"自定义命令"后，可以输入任意 shell 命令模板。

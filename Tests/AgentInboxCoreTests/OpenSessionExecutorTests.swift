@@ -148,6 +148,7 @@ final class OpenSessionExecutorTests: XCTestCase {
         XCTAssertEqual(OpenSessionMethod.finder.label, "Finder")
         XCTAssertEqual(OpenSessionMethod.terminal.label, "终端")
         XCTAssertEqual(OpenSessionMethod.vscode.label, "VS Code")
+        XCTAssertEqual(OpenSessionMethod.superconductor.label, "SC")
         XCTAssertEqual(OpenSessionMethod.custom.label, "自定义命令")
     }
 
