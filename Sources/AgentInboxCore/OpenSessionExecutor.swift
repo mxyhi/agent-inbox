@@ -4,7 +4,7 @@ import OSLog
 
 /// 会话打开执行引擎 —— 根据配置以不同方式打开会话工作目录
 /// 支持 Finder/Terminal/VS Code 预设方式,以及自定义 shell 命令模板
-public final class OpenSessionExecutor {
+public final class OpenSessionExecutor: Sendable {
     private let logger = Logger(subsystem: "agent-inbox", category: "OpenSessionExecutor")
 
     public init() {}
@@ -79,7 +79,7 @@ public final class OpenSessionExecutor {
         logger.info("VS Code 打开目录: \(cwd, privacy: .public)")
     }
 
-    /// Superconductor 选中会话的 worktree，并切换到对应原生对话。
+    /// 先打开工作目录，再尽力定位原会话；定位失败保留目录跳转结果。
     private func executeSuperconductor(session: SessionSummary) throws {
         guard let cwd = session.cwd, !cwd.isEmpty else {
             logger.warning("SC 打开失败: cwd 缺失")
@@ -96,24 +96,27 @@ public final class OpenSessionExecutor {
             arguments: ["worktree", "open", cwd]
         )
 
-        let conversationID = "conv:\(session.provider.rawValue):\(session.sessionID)"
-        try executeProcess(
-            executable: executable,
-            arguments: ["chat", "select", conversationID]
-        )
+        do {
+            try SuperconductorSessionSelector { arguments in
+                try self.executeProcess(executable: executable, arguments: arguments)
+            }.select(session: session)
+            logger.info("SC 已精确选中原会话: provider=\(session.provider.rawValue, privacy: .public), session=\(session.sessionID, privacy: .public)")
+        } catch {
+            // 用户允许 session 定位失败时只进入工作目录；目录打开失败仍向上抛出。
+            logger.warning("SC 仅打开工作目录，会话定位失败: session=\(session.sessionID, privacy: .public), reason=\(error.localizedDescription, privacy: .public)")
+        }
 
-        // 选择操作在后台完成，最后把 SC 主窗口带到前台；避免 --activate 被
-        // agent 运行上下文拒绝，同时保留用户点击后的可见跳转。
+        // 用户点击后显示已选中的工作目录，不依赖对话是否仍存在。
         do {
             try executeProcess(
                 executable: URL(filePath: "/usr/bin/open"),
                 arguments: ["-b", "engineering.super.app"]
             )
         } catch {
-            logger.warning("SC 已完成选择，但前台激活失败: \(String(describing: error), privacy: .public)")
+            logger.warning("SC 已打开工作目录，但前台激活失败: \(String(describing: error), privacy: .public)")
         }
         logger.info(
-            "SC 已选中 worktree 与对话: cwd=\(cwd, privacy: .public), conversation=\(conversationID, privacy: .public)"
+            "SC 已打开工作目录: cwd=\(cwd, privacy: .public)"
         )
     }
 
@@ -190,16 +193,28 @@ public final class OpenSessionExecutor {
         }
     }
 
-    private func executeProcess(executable: URL, arguments: [String]) throws {
+    @discardableResult
+    private func executeProcess(executable: URL, arguments: [String]) throws -> Data {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
 
-        let errorPipe = Pipe()
-        process.standardError = errorPipe
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        // 持续读取大体积 stdout；stderr 使用临时文件，避免双管道互相阻塞。
+        let errorURL = FileManager.default.temporaryDirectory.appending(path: "agent-inbox-sc-\(UUID().uuidString).stderr")
+        guard FileManager.default.createFile(atPath: errorURL.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        defer { try? FileManager.default.removeItem(at: errorURL) }
+        let errorHandle = try FileHandle(forWritingTo: errorURL)
+        defer { try? errorHandle.close() }
+        process.standardError = errorHandle
+        let output: Data
 
         do {
             try process.run()
+            output = outputPipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
         } catch {
             logger.error("命令执行异常: \(String(describing: error), privacy: .public)")
@@ -207,7 +222,7 @@ public final class OpenSessionExecutor {
         }
 
         guard process.terminationStatus == 0 else {
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorData = try Data(contentsOf: errorURL)
             let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
             let command = ([executable.path] + arguments).joined(separator: " ")
             logger.error("命令执行失败: status=\(process.terminationStatus), stderr=\(errorOutput, privacy: .public)")
@@ -217,6 +232,7 @@ public final class OpenSessionExecutor {
                 stderr: errorOutput
             )
         }
+        return output
     }
 }
 

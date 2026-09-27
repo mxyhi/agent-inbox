@@ -23,7 +23,10 @@ Agent Inbox 支持通过配置自定义如何打开 Codex、Grok、Claude 会话
 
 4. **SC**
    - 通过 `sc worktree open` 选中会话的 worktree
-   - 通过 `sc chat select` 切换到对应的原生对话
+   - 查询现有标签页的源会话 ID，通过 `sc worktree select --session` 精确选中原会话，并回读验证
+   - 原生会话 ID 优先，避免选到同一会话的聊天副本；不调用 `chat select` 导入聊天
+   - 定位失败、歧义或分屏内部会话暂不支持定位时，仅进入工作目录，不弹会话定位失败通知
+   - 工作目录打开失败仍正常报错，自定义命令不受此逻辑影响
    - 需要已安装 Superconductor CLI
 
 ### 自定义命令

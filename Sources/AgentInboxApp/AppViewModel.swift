@@ -27,6 +27,7 @@ final class AppViewModel: ObservableObject {
     private var pendingChangedPaths: Set<String> = []
     private var hasLoadedInitialSnapshot = false
     private var pendingNotificationSessionID: String?
+    private var isSelectingSuperconductorSession = false
 
     init(
         monitor: CompositeSessionMonitor = CompositeSessionMonitor(),
@@ -132,12 +133,31 @@ final class AppViewModel: ObservableObject {
             return
         }
 
-        do {
-            try executor.execute(session: session, config: openSessionConfig)
-            logger.info("成功打开会话: \(id, privacy: .public), method=\(self.openSessionConfig.method.rawValue, privacy: .public)")
-        } catch {
-            logger.error("打开会话失败: \(String(describing: error), privacy: .public)")
-            notificationController.show(title: "打开会话失败", message: error.localizedDescription)
+        let config = openSessionConfig
+        if config.method == .superconductor {
+            // CLI 查询放到后台；连续点击期间只执行一个跳转，避免选择互相覆盖。
+            guard !isSelectingSuperconductorSession else { return }
+            isSelectingSuperconductorSession = true
+            Task {
+                defer { isSelectingSuperconductorSession = false }
+                do {
+                    try await Task.detached { [executor] in
+                        try executor.execute(session: session, config: config)
+                    }.value
+                    logger.info("SC 打开流程完成: \(id, privacy: .public)")
+                } catch {
+                    logger.error("SC 打开失败: \(String(describing: error), privacy: .public)")
+                    notificationController.show(title: "打开会话失败", message: error.localizedDescription)
+                }
+            }
+        } else {
+            do {
+                try executor.execute(session: session, config: config)
+                logger.info("成功打开会话: \(id, privacy: .public), method=\(config.method.rawValue, privacy: .public)")
+            } catch {
+                logger.error("打开会话失败: \(String(describing: error), privacy: .public)")
+                notificationController.show(title: "打开会话失败", message: error.localizedDescription)
+            }
         }
     }
 
