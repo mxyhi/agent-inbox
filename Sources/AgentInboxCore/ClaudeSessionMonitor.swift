@@ -6,6 +6,7 @@ import OSLog
 /// Claude Code 将每个项目的会话直接写入 `~/.claude/projects/<encoded-cwd>/`。
 /// transcript 只负责保存对话，运行态再用 `claude agents --json` 补齐；CLI 不可用时
 /// 仍可从 transcript 尾部的 stop_hook_summary/turn_duration 判定待办。
+/// live 状态只在快照晚于 transcript 最后写入时生效，否则以 transcript 尾部为准。
 public actor ClaudeSessionMonitor {
     private struct TranscriptFile {
         let url: URL
@@ -114,6 +115,8 @@ public actor ClaudeSessionMonitor {
     public nonisolated let sessionsRoot: URL
     private let maxFiles: Int
     private let headByteLimit: Int
+    // 单张图片 base64 约数百 KB；8 MB 覆盖多图首条消息，同时限制异常大行的读取开销。
+    private let headLineByteLimit = 8 * 1024 * 1024
     private let tailByteLimit: UInt64
     private let queriesLiveSessions: Bool
     private let claudeExecutableOverride: URL?
@@ -348,8 +351,7 @@ public actor ClaudeSessionMonitor {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
 
-        let headData = try handle.read(upToCount: headByteLimit) ?? Data()
-        let head = parseHead(data: headData)
+        let head = parseHead(data: try readHead(handle: handle))
         let tail = try parseTail(handle: handle, modifiedAt: modifiedAt)
         let fallbackID = url.deletingPathExtension().lastPathComponent
         return ParsedTranscript(
@@ -369,15 +371,32 @@ public actor ClaudeSessionMonitor {
         var firstPrompt: String?
     }
 
+    /// 读取文件头的完整行。窗口截断在行中间时补读到该行结束：首条 user 消息内嵌 base64 图片时
+    /// 单行可达数百 KB，直接丢弃会同时丢失 cwd 与首个 prompt。单行超过 headLineByteLimit 才放弃。
+    private func readHead(handle: FileHandle) throws -> Data {
+        let newline = UInt8(ascii: "\n")
+        var data = try handle.read(upToCount: headByteLimit) ?? Data()
+        guard data.count >= headByteLimit else { return data }
+
+        while data.count < headLineByteLimit {
+            guard let chunk = try handle.read(upToCount: headByteLimit), !chunk.isEmpty else {
+                return data
+            }
+            if let end = chunk.firstIndex(of: newline) {
+                data.append(chunk.prefix(upTo: end))
+                return data
+            }
+            data.append(chunk)
+        }
+
+        logger.warning("Claude transcript head line exceeds \(self.headLineByteLimit, privacy: .public) bytes; dropping it")
+        guard let end = data.lastIndex(of: newline) else { return Data() }
+        return Data(data.prefix(upTo: end))
+    }
+
     private func parseHead(data: Data) -> HeadInfo {
         guard !data.isEmpty else { return HeadInfo() }
-        let completeData: Data
-        if data.count >= headByteLimit, let newline = data.lastIndex(of: UInt8(ascii: "\n")) {
-            completeData = Data(data.prefix(upTo: newline))
-        } else {
-            completeData = data
-        }
-        guard let text = String(data: completeData, encoding: .utf8) else {
+        guard let text = String(data: data, encoding: .utf8) else {
             logger.warning("Claude transcript head is not valid UTF-8")
             return HeadInfo()
         }
@@ -459,9 +478,17 @@ public actor ClaudeSessionMonitor {
         file: TranscriptFile,
         liveStatus: LiveStatus?
     ) -> SessionSummary {
+        // live 快照早于 transcript 最后写入时已过期：例如 CLI 启动后未提交 prompt 时是 idle，
+        // 随后首个 prompt 写入 transcript。此时以 transcript 尾部为准，避免把运行中会话误判为待办。
+        let isLiveStatusStale = file.modifiedAt > liveStatusLoadedAt
+        if isLiveStatusStale, liveStatus != nil {
+            logger.debug(
+                "Ignoring stale Claude live status for \(parsed.sessionID, privacy: .public); transcript is newer"
+            )
+        }
         let lifecycle: TurnLifecycleState
         let completedAt: Date?
-        switch liveStatus {
+        switch isLiveStatusStale ? nil : liveStatus {
         case .active:
             lifecycle = .running
             completedAt = nil

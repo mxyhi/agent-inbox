@@ -145,6 +145,78 @@ func claudeMonitorUsesLiveCLIStatusOverTranscriptFallback() async throws {
 }
 
 @Test
+func claudeMonitorReadsOversizedFirstPromptWithImages() async throws {
+    let root = try makeTemporaryClaudeProjectsRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    // 首条 user 消息内嵌 base64 图片，整行远超 headByteLimit；cwd 也只在这一行首次出现。
+    let image = String(repeating: "A", count: 4096)
+    let transcript = """
+    {"type":"mode","mode":"normal","sessionId":"claude-image"}
+    {"type":"user","sessionId":"claude-image","timestamp":"2026-08-08T10:00:00.000Z","cwd":"/tmp/image-project","message":{"role":"user","content":[{"type":"text","text":"[Image #1] 这是什么原因?"},{"type":"image","source":{"type":"base64","data":"\(image)"}}]}}
+    {"type":"system","subtype":"turn_duration","sessionId":"claude-image","timestamp":"2026-08-08T10:00:01.000Z"}
+    """
+    _ = try writeClaudeTranscript(
+        root: root,
+        project: "-tmp-image-project",
+        name: "claude-image.jsonl",
+        body: transcript,
+        modifiedAt: Date()
+    )
+
+    let monitor = ClaudeSessionMonitor(sessionsRoot: root, headByteLimit: 256, queriesLiveSessions: false)
+    let summary = try #require(await monitor.scan().first)
+
+    #expect(summary.cwd == "/tmp/image-project")
+    #expect(summary.projectName == "image-project")
+    #expect(summary.firstPrompt == "[Image #1] 这是什么原因?")
+}
+
+@Test
+func claudeMonitorIgnoresLiveIdleSampledBeforeNewPrompt() async throws {
+    let root = try makeTemporaryClaudeProjectsRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let completedTurn = """
+    {"type":"user","sessionId":"claude-resumed","timestamp":"2026-08-08T10:00:00.000Z","cwd":"/tmp/resumed","message":{"role":"user","content":"上一轮"}}
+    {"type":"system","subtype":"turn_duration","sessionId":"claude-resumed","timestamp":"2026-08-08T10:00:01.000Z"}
+    """
+    let file = try writeClaudeTranscript(
+        root: root,
+        project: "-tmp-resumed",
+        name: "claude-resumed.jsonl",
+        body: completedTurn,
+        modifiedAt: Date().addingTimeInterval(-60)
+    )
+
+    // 假 CLI 始终报告 idle；第二次扫描仍命中 30 秒 live 缓存，模拟采样后用户才提交新 prompt。
+    let executable = root.appending(path: "fake-claude")
+    let script = #"""
+    #!/bin/sh
+    printf '%s\n' '[{"sessionId":"claude-resumed","status":"idle"}]'
+    """#
+    try Data(script.utf8).write(to: executable)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+    let monitor = ClaudeSessionMonitor(sessionsRoot: root, claudeExecutableURL: executable)
+    #expect(await monitor.scan().first?.lifecycleState == .completed)
+
+    let newPrompt = """
+
+    {"type":"user","sessionId":"claude-resumed","timestamp":"2026-08-08T10:05:00.000Z","cwd":"/tmp/resumed","message":{"role":"user","content":"新一轮"}}
+    """
+    try Data((completedTurn + newPrompt).utf8).write(to: file)
+    try FileManager.default.setAttributes(
+        [.modificationDate: Date().addingTimeInterval(1)],
+        ofItemAtPath: file.path
+    )
+
+    let summary = try #require(await monitor.scanChangedPaths([file.path]).first)
+    #expect(summary.lifecycleState == .running)
+    #expect(summary.taskCompletedAt == nil)
+}
+
+@Test
 func compositeMonitorMergesClaudeAndPublishesItsWatchRoot() async throws {
     let temporaryRoot = try makeTemporaryClaudeProjectsRoot()
     defer { try? FileManager.default.removeItem(at: temporaryRoot) }
