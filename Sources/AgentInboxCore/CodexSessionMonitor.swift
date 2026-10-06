@@ -102,6 +102,11 @@ public actor CodexSessionMonitor {
 
     /// 扫描最近 rollout 文件,返回会话摘要(mtime 未变的文件直接命中缓存,不重新解析)
     public func scan() -> [SessionSummary] {
+        // 后台 actor 不依赖主线程 run loop 释放 Foundation 枚举/解析临时对象。
+        autoreleasepool { scanRollouts() }
+    }
+
+    private func scanRollouts() -> [SessionSummary] {
         // FileManager 非 Sendable,不作为属性持有,方法内局部使用共享实例
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: sessionsRoot.path) else {
@@ -124,7 +129,7 @@ public actor CodexSessionMonitor {
             }
 
             do {
-                let entry = try parseRollout(at: file.url, modifiedAt: file.modifiedAt)
+                let entry = try autoreleasepool { try parseRollout(at: file.url, modifiedAt: file.modifiedAt) }
                 cache[path] = entry
                 summaries.append(entry.summary)
             } catch {
@@ -143,6 +148,10 @@ public actor CodexSessionMonitor {
 
     /// 增量扫描 FSEvents 命中的路径:只重读变更的 rollout 文件;目录级事件或空缓存时回退 full scan
     public func scanChangedPaths(_ changedPaths: [String]) -> [SessionSummary] {
+        autoreleasepool { scanChangedRollouts(changedPaths) }
+    }
+
+    private func scanChangedRollouts(_ changedPaths: [String]) -> [SessionSummary] {
         guard !changedPaths.isEmpty else {
             return cachedSummaries()
         }

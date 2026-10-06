@@ -11,7 +11,7 @@ extension Notification.Name {
 
 /// 浮窗控制器 —— 无边框透明面板的生命周期、自适应尺寸与位置持久化
 /// V4 核心机制:
-/// 1. NSHostingView.sizingOptions = .preferredContentSize 提供 SwiftUI 理想尺寸,由回调显式驱动窗口收放(胶囊⇄列表);
+/// 1. SwiftUI 实际布局尺寸驱动窗口收放(胶囊⇄列表)，不依赖 intrinsic size 失效通知;
 /// 2. 窗口 resize 后回钉「右上角锚点」,保证收放时视觉上固定在右上角不漂移;
 /// 3. 用户拖动结束后把锚点写入 SQLite,跨启动恢复(补齐 task_plan 里未落地的窗口位置持久化)。
 @MainActor
@@ -52,17 +52,16 @@ final class FloatingPanelController {
 
         // SwiftUI 内容:preferredContentSize 提供理想尺寸;窗口大小由回调显式同步。
         let hostingView = DraggableHostingView(
-            rootView: PanelRoot(viewModel: viewModel) { [weak self] in
+            rootView: PanelRoot(viewModel: viewModel, onHide: { [weak self] in
                 // 右键菜单「隐藏浮窗」
                 self?.hide()
-            }
+            }, onContentSizeChange: { [weak self] size in
+                // 布局事务结束后调整 AppKit frame，避免重入 SwiftUI 布局。
+                DispatchQueue.main.async { self?.syncContentSize(size) }
+            })
         )
         hostingView.onUserDrag = { [weak self] dragging in
             self?.setUserDragging(dragging)
-        }
-        hostingView.onContentSizeChange = { [weak self, weak hostingView] in
-            guard let self, let hostingView else { return }
-            self.syncContentSize(hostingView.fittingSize)
         }
         hostingView.sizingOptions = [.preferredContentSize]
         panel.contentView = hostingView
@@ -369,16 +368,6 @@ final class DraggableHostingView<Content: View>: NSHostingView<Content> {
     private var dragActive = false
     /// true = 开始拖，false = 松手。控制器据此暂停尺寸回钉。
     var onUserDrag: ((Bool) -> Void)?
-    /// SwiftUI 内容尺寸变化时通知窗口控制器。
-    var onContentSizeChange: (() -> Void)?
-
-    override func invalidateIntrinsicContentSize() {
-        super.invalidateIntrinsicContentSize()
-        DispatchQueue.main.async { [weak self] in
-            self?.onContentSizeChange?()
-        }
-    }
-
     override func mouseDown(with event: NSEvent) {
         pressOrigin = event.locationInWindow
         dragActive = false

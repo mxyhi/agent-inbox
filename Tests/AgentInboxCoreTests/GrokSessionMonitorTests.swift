@@ -73,7 +73,11 @@ func grokMonitorMarksMidTurnAliveProcessAsRunning() async throws {
         ["session_id": sessionID, "pid": Int(getpid()), "cwd": cwd, "opened_at": "2026-07-15T12:00:00.000Z"]
     ])
 
-    let monitor = GrokSessionMonitor(sessionsRoot: root, activeSessionsFile: activeFile)
+    let monitor = GrokSessionMonitor(sessionsRoot: root, activeSessionsFile: activeFile, inspectProcess: { pid in
+        guard pid == getpid(), let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return nil }
+        let files = Set(enumerator.compactMap { ($0 as? URL)?.standardizedFileURL.path }.filter { $0.hasSuffix("/events.jsonl") })
+        return GrokProcessSnapshot(startedAt: .distantPast, openFiles: files)
+    })
     let summary = try #require(await monitor.scan().first)
 
     #expect(summary.provider == .grok)
@@ -116,7 +120,11 @@ func grokMonitorMarksEndedTurnWhileProcessAliveAsWaitingForNextPrompt() async th
         ["session_id": sessionID, "pid": Int(getpid()), "cwd": cwd]
     ])
 
-    let monitor = GrokSessionMonitor(sessionsRoot: root, activeSessionsFile: activeFile)
+    let monitor = GrokSessionMonitor(sessionsRoot: root, activeSessionsFile: activeFile, inspectProcess: { pid in
+        guard pid == getpid(), let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return nil }
+        let files = Set(enumerator.compactMap { ($0 as? URL)?.standardizedFileURL.path }.filter { $0.hasSuffix("/events.jsonl") })
+        return GrokProcessSnapshot(startedAt: .distantPast, openFiles: files)
+    })
     let summary = try #require(await monitor.scan().first)
 
     #expect(summary.lifecycleState == .completed)
@@ -164,7 +172,11 @@ func grokMonitorMarksDeadProcessWithCompletedTurnAsTodoCandidate() async throws 
         ["session_id": sessionID, "pid": 2_147_483_646, "cwd": cwd]
     ])
 
-    let monitor = GrokSessionMonitor(sessionsRoot: root, activeSessionsFile: activeFile)
+    let monitor = GrokSessionMonitor(sessionsRoot: root, activeSessionsFile: activeFile, inspectProcess: { pid in
+        guard pid == getpid(), let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return nil }
+        let files = Set(enumerator.compactMap { ($0 as? URL)?.standardizedFileURL.path }.filter { $0.hasSuffix("/events.jsonl") })
+        return GrokProcessSnapshot(startedAt: .distantPast, openFiles: files)
+    })
     let summary = try #require(await monitor.scan().first)
 
     #expect(summary.lifecycleState == .completed)
@@ -206,7 +218,11 @@ func grokMonitorIgnoresZombiePidInActiveSessions() async throws {
         ["session_id": sessionID, "pid": 2_147_483_645, "cwd": cwd]
     ])
 
-    let monitor = GrokSessionMonitor(sessionsRoot: root, activeSessionsFile: activeFile)
+    let monitor = GrokSessionMonitor(sessionsRoot: root, activeSessionsFile: activeFile, inspectProcess: { pid in
+        guard pid == getpid(), let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return nil }
+        let files = Set(enumerator.compactMap { ($0 as? URL)?.standardizedFileURL.path }.filter { $0.hasSuffix("/events.jsonl") })
+        return GrokProcessSnapshot(startedAt: .distantPast, openFiles: files)
+    })
     let summary = try #require(await monitor.scan().first)
     #expect(summary.lifecycleState == .unknown)
 }
@@ -249,7 +265,11 @@ func grokSubagentsStayOnTheParentConversation() async throws {
     try Data(#"{"audience":"subagent"}"#.utf8).write(to: audienceDir.appending(path: "prompt_context.json"))
 
     let activeFile = try writeActiveSessions(root: root, records: [])
-    let monitor = GrokSessionMonitor(sessionsRoot: root, activeSessionsFile: activeFile)
+    let monitor = GrokSessionMonitor(sessionsRoot: root, activeSessionsFile: activeFile, inspectProcess: { pid in
+        guard pid == getpid(), let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return nil }
+        let files = Set(enumerator.compactMap { ($0 as? URL)?.standardizedFileURL.path }.filter { $0.hasSuffix("/events.jsonl") })
+        return GrokProcessSnapshot(startedAt: .distantPast, openFiles: files)
+    })
     let summaries = await monitor.scan()
     #expect(Set(summaries.map(\.sessionID)) == ["parent-conversation", "other-conversation"])
 

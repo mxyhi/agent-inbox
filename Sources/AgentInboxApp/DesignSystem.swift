@@ -103,11 +103,6 @@ enum DS {
         static let state = Animation.spring(response: 0.35, dampingFraction: 0.8)
         /// hover 反馈
         static let hover = Animation.easeOut(duration: 0.12)
-        /// 运行光点单相呼吸时长(完整周期 = 2 倍)
-        static let breathPhase: TimeInterval = 0.9
-        /// 待办涟漪:扩散时长 + 静止间歇
-        static let rippleExpand: TimeInterval = 1.1
-        static let rippleRest: TimeInterval = 1.4
         /// 长按完成所需按住时长(防误触:短于此松手不触发)。1.0s 让进度环填充清晰可读、手感刻意克制
         static let holdToComplete: TimeInterval = 1.0
         /// 中途松手时进度环回抽/淡出时长

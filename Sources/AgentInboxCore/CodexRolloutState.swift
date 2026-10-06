@@ -73,7 +73,10 @@ struct CodexRolloutState {
             let consumed = pending.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
                 var lineStart = 0
                 for index in scanStart..<bytes.count where bytes[index] == 0x0A {
-                    consume(Data(bytes[lineStart..<index]), decoder: decoder, modifiedAt: modifiedAt, parseDate: parseDate)
+                    // 大型历史回放的桥接对象逐行释放，避免累积成数百MB的分配器峰值。
+                    autoreleasepool {
+                        consume(Data(bytes[lineStart..<index]), decoder: decoder, modifiedAt: modifiedAt, parseDate: parseDate)
+                    }
                     offset += UInt64(index - lineStart + 1)
                     lineStart = index + 1
                 }

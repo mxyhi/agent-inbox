@@ -2,30 +2,10 @@ import Darwin
 import Foundation
 import OSLog
 
-/// Grok 会话监控器
-///
-/// 扫描 `~/.grok/sessions/<encoded-cwd>/<session-id>/`,结合:
-/// - `summary.json` 元数据
-/// - `events.jsonl` 尾部 turn_started / turn_ended
-/// - `active_sessions.json` + pid 存活校验
-/// - 按需限额读 `updates.jsonl` 取 firstPrompt / lastAgentMessage
-///
-/// 状态语义(产品锁定 — 「agent 等你下一步」):
-/// - mid-turn 且 pid 存活 → running
-/// - turn_ended(completed) → completed(待办):进程仍活=等下一步提示;进程已退=会话收尾待确认
-/// - mid-turn 但 pid 已死(崩溃/僵尸) → unknown,不展示
-/// - aborted / 空会话 → 不进待办
-/// - `subagents/` 下的子会话属于父对话，不单独进待办
+/// Grok 主回合与后台工作监控。进程归属取实际打开的会话文件，状态来自增量事件。
+/// 后台命令、monitor、有效 loop、子代理跨回合继续运行；子会话只汇总到父对话。
 public actor GrokSessionMonitor {
-    /// 缓存指纹:summary/events mtime + pid 存活位,任一变化则重解析
-    private struct CacheFingerprint: Equatable {
-        let summaryModifiedAt: Date
-        let eventsModifiedAt: Date?
-        let processAlive: Bool
-    }
-
     private struct CachedEntry {
-        let fingerprint: CacheFingerprint
         let summary: SessionSummary
     }
 
@@ -57,23 +37,7 @@ public actor GrokSessionMonitor {
     }
 
     private struct ActiveSessionRecord: Decodable {
-        let sessionId: String
         let pid: Int32
-        let cwd: String?
-        let openedAt: String?
-
-        enum CodingKeys: String, CodingKey {
-            case sessionId = "session_id"
-            case pid
-            case cwd
-            case openedAt = "opened_at"
-        }
-    }
-
-    private struct EventLine: Decodable {
-        let type: String
-        let ts: String?
-        let outcome: String?
     }
 
     private struct UpdatesEnvelope: Decodable {
@@ -99,17 +63,15 @@ public actor GrokSessionMonitor {
         }
     }
 
-    private enum TurnTailState {
-        case midTurn(startedAt: Date?)
-        case ended(at: Date?, outcome: String?)
-        case none
-    }
-
     public nonisolated let sessionsRoot: URL
     public nonisolated let activeSessionsFile: URL
     private let maxFiles: Int
-    private let eventsTailByteLimit: UInt64
     private let updatesByteLimit: Int
+    private let inspectProcess: @Sendable (Int32) -> GrokProcessSnapshot?
+    private var runtime: [String: GrokRuntimeState] = [:]
+    private var promptCache: [String: (stamp: GrokFileStamp, first: String?, last: String?)] = [:]
+    private var liveSessions: [String: GrokProcessSnapshot] = [:]
+    private var inspectionFailures: Set<Int32> = []
     private let logger = Logger(subsystem: "agent-inbox", category: "GrokSessionMonitor")
 
     private let fractionalFormatter: ISO8601DateFormatter
@@ -127,13 +89,20 @@ public actor GrokSessionMonitor {
         activeSessionsFile: URL = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: ".grok/active_sessions.json"),
         maxFiles: Int = 80,
-        eventsTailByteLimit: UInt64 = 128 * 1024,
         updatesByteLimit: Int = 256 * 1024
     ) {
-        self.sessionsRoot = sessionsRoot
-        self.activeSessionsFile = activeSessionsFile
+        self.init(sessionsRoot: sessionsRoot, activeSessionsFile: activeSessionsFile,
+                  maxFiles: maxFiles, updatesByteLimit: updatesByteLimit,
+                  inspectProcess: { GrokProcessSnapshot.read(pid: $0) })
+    }
+
+    init(sessionsRoot: URL, activeSessionsFile: URL, maxFiles: Int = 80,
+         updatesByteLimit: Int = 256 * 1024,
+         inspectProcess: @escaping @Sendable (Int32) -> GrokProcessSnapshot?) {
+        self.inspectProcess = inspectProcess
+        self.sessionsRoot = sessionsRoot.resolvingSymlinksInPath()
+        self.activeSessionsFile = activeSessionsFile.resolvingSymlinksInPath()
         self.maxFiles = maxFiles
-        self.eventsTailByteLimit = eventsTailByteLimit
         self.updatesByteLimit = updatesByteLimit
 
         let fractional = ISO8601DateFormatter()
@@ -147,45 +116,40 @@ public actor GrokSessionMonitor {
 
     /// 全量扫描最近 session 目录
     public func scan() -> [SessionSummary] {
+        // Swift actor 工作线程没有每轮 AppKit run loop 的 autorelease pool。
+        // 大目录枚举产生的 Foundation 临时对象必须在本轮结束释放。
+        autoreleasepool { scanSessions() }
+    }
+
+    private func scanSessions() -> [SessionSummary] {
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: sessionsRoot.path) else {
             cache.removeAll()
+            runtime.removeAll()
+            promptCache.removeAll()
             logger.info("Grok sessions root missing: \(self.sessionsRoot.path, privacy: .public)")
             return []
         }
 
-        let aliveSessionIDs = loadAliveSessionIDs(fileManager: fileManager)
+        refreshLiveSessions(fileManager: fileManager)
         let dirs = recentSessionDirectories(fileManager: fileManager)
-        var cacheHits = 0
         var summaries: [SessionSummary] = []
         summaries.reserveCapacity(dirs.count)
 
         for dir in dirs {
             let path = dir.url.path
-            let processAlive = aliveSessionIDs.contains(dir.sessionID)
-            let fingerprint = CacheFingerprint(
-                summaryModifiedAt: dir.summaryModifiedAt,
-                eventsModifiedAt: dir.eventsModifiedAt,
-                processAlive: processAlive
-            )
-
-            if let entry = cache[path], entry.fingerprint == fingerprint {
-                summaries.append(entry.summary)
-                cacheHits += 1
-                continue
-            }
-
             do {
-                let summary = try parseSessionDirectory(
+                let summary = try autoreleasepool { try parseSessionDirectory(
                     at: dir.url,
                     sessionID: dir.sessionID,
                     summaryModifiedAt: dir.summaryModifiedAt,
                     eventsModifiedAt: dir.eventsModifiedAt,
-                    processAlive: processAlive
-                )
-                cache[path] = CachedEntry(fingerprint: fingerprint, summary: summary)
+                    host: liveSessions[path]
+                ) }
+                cache[path] = CachedEntry(summary: summary)
                 summaries.append(summary)
             } catch {
+                cache.removeValue(forKey: path)
                 logger.error(
                     "Failed to parse Grok session \(path, privacy: .public): \(String(describing: error), privacy: .public)"
                 )
@@ -194,15 +158,21 @@ public actor GrokSessionMonitor {
 
         let alivePaths = Set(dirs.map(\.url.path))
         cache = cache.filter { alivePaths.contains($0.key) }
+        runtime = runtime.filter { alivePaths.contains($0.key) }
+        promptCache = promptCache.filter { alivePaths.contains($0.key) }
 
         logger.debug(
-            "Scanned \(dirs.count, privacy: .public) Grok sessions, cache hits \(cacheHits, privacy: .public), alive \(aliveSessionIDs.count, privacy: .public)"
+            "Scanned \(dirs.count, privacy: .public) Grok sessions, attached \(self.liveSessions.count, privacy: .public)"
         )
         return summaries
     }
 
     /// 增量扫描:命中 session 目录或 active_sessions 时局部刷新;目录级事件回退 full scan
     public func scanChangedPaths(_ changedPaths: [String]) -> [SessionSummary] {
+        autoreleasepool { scanChangedSessions(changedPaths) }
+    }
+
+    private func scanChangedSessions(_ changedPaths: [String]) -> [SessionSummary] {
         guard !changedPaths.isEmpty else {
             return cachedSummaries()
         }
@@ -214,6 +184,8 @@ public actor GrokSessionMonitor {
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: sessionsRoot.path) else {
             cache.removeAll()
+            runtime.removeAll()
+            promptCache.removeAll()
             logger.info("Grok sessions root missing during incremental scan")
             return []
         }
@@ -224,7 +196,7 @@ public actor GrokSessionMonitor {
         let activePath = activeSessionsFile.standardizedFileURL.path
 
         for path in changedPaths {
-            let url = URL(filePath: path).standardizedFileURL
+            let url = URL(filePath: path).resolvingSymlinksInPath()
             let pathString = url.path
 
             // active_sessions 变化影响全部 alive 位 → 全扫
@@ -257,10 +229,13 @@ public actor GrokSessionMonitor {
             return cachedSummaries()
         }
 
-        let aliveSessionIDs = loadAliveSessionIDs(fileManager: fileManager)
+        refreshLiveSessions(fileManager: fileManager)
         var reparsed = 0
+        // 子代理变化要重新归并父会话；同时复核活宿主，避免退出/切换后保留旧快照。
+        sessionDirs.formUnion(liveSessions.keys)
+        sessionDirs.formUnion(cache.filter { $0.value.summary.runtimeVerified == true }.map(\.key))
         for path in sessionDirs {
-            if updateCachedSession(at: URL(filePath: path), aliveSessionIDs: aliveSessionIDs, fileManager: fileManager) {
+            if updateCachedSession(at: URL(filePath: path), fileManager: fileManager) {
                 reparsed += 1
             }
         }
@@ -283,47 +258,29 @@ public actor GrokSessionMonitor {
 
     /// 枚举 sessionsRoot 下全部 summary.json,按 mtime 取最近 maxFiles
     private func recentSessionDirectories(fileManager: FileManager) -> [SessionDirInfo] {
+        // 找到会话根就停止向下递归；checkpoints、终端输出等历史树不参与会话发现。
         guard let enumerator = fileManager.enumerator(
-            at: sessionsRoot,
-            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            logger.warning("Unable to enumerate Grok sessions root: \(self.sessionsRoot.path, privacy: .public)")
-            return []
-        }
+            at: sessionsRoot, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+        ) else { return [] }
 
         var dirs: [SessionDirInfo] = []
         var seenSubagents = subagentIDs
-        for case let url as URL in enumerator {
-            if let childID = subagentID(in: url) {
-                seenSubagents.insert(childID)
-            }
-            guard url.lastPathComponent == "summary.json" else { continue }
-            do {
-                let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
-                guard values.isRegularFile == true, let summaryMtime = values.contentModificationDate else {
-                    continue
-                }
-                let sessionDir = url.deletingLastPathComponent()
-                let sessionID = sessionDir.lastPathComponent
-                guard !sessionID.isEmpty else { continue }
-
-                let eventsURL = sessionDir.appending(path: "events.jsonl")
-                let eventsMtime = try? eventsURL.resourceValues(forKeys: [.contentModificationDateKey])
-                    .contentModificationDate
-
-                dirs.append(
-                    SessionDirInfo(
-                        url: sessionDir,
-                        sessionID: sessionID,
-                        summaryModifiedAt: summaryMtime,
-                        eventsModifiedAt: eventsMtime
-                    )
-                )
-            } catch {
-                logger.error(
-                    "Failed to read Grok summary metadata \(url.path, privacy: .public): \(String(describing: error), privacy: .public)"
-                )
+        for case let directory as URL in enumerator {
+            autoreleasepool {
+                guard (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { return }
+                let summaryURL = directory.appending(path: "summary.json")
+                guard let values = try? summaryURL.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]),
+                      values.isRegularFile == true, let summaryMtime = values.contentModificationDate else { return }
+                enumerator.skipDescendants()
+                let sessionDir = directory.resolvingSymlinksInPath()
+                let children = (try? fileManager.contentsOfDirectory(
+                    atPath: sessionDir.appending(path: "subagents").path
+                )) ?? []
+                seenSubagents.formUnion(children)
+                let eventsMtime = try? sessionDir.appending(path: "events.jsonl")
+                    .resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+                dirs.append(SessionDirInfo(url: sessionDir, sessionID: sessionDir.lastPathComponent,
+                    summaryModifiedAt: summaryMtime, eventsModifiedAt: eventsMtime))
             }
         }
 
@@ -343,14 +300,14 @@ public actor GrokSessionMonitor {
         subagentIDs = seenSubagents
 
         // 按 summary/events 较新者排序
-        return Array(
-            conversations.sorted { lhs, rhs in
+        let ordered = conversations.sorted { lhs, rhs in
                 let left = max(lhs.summaryModifiedAt, lhs.eventsModifiedAt ?? .distantPast)
                 let right = max(rhs.summaryModifiedAt, rhs.eventsModifiedAt ?? .distantPast)
                 return left > right
             }
-            .prefix(maxFiles)
-        )
+        // 历史窗口不能挤掉静默但仍在运行的会话。
+        return ordered.filter { liveSessions[$0.url.path] != nil }
+            + ordered.filter { liveSessions[$0.url.path] == nil }.prefix(maxFiles)
     }
 
     /// `.../subagents/<session-id>/...` 的下一段就是子会话 id。
@@ -379,51 +336,41 @@ public actor GrokSessionMonitor {
         let removed = cache.filter { $0.value.summary.sessionID == sessionID }.map(\.key)
         for path in removed {
             cache.removeValue(forKey: path)
+            runtime.removeValue(forKey: path)
+            promptCache.removeValue(forKey: path)
             logger.info("子会话移出待办: \(sessionID, privacy: .public)")
         }
     }
 
-    // MARK: - active_sessions + pid
+    // MARK: - 活宿主与会话归属
 
-    /// 读取 active_sessions.json,仅保留 kill(pid,0) 仍存活的 session_id
-    private func loadAliveSessionIDs(fileManager: FileManager) -> Set<String> {
-        guard fileManager.fileExists(atPath: activeSessionsFile.path) else {
-            return []
-        }
-
+    private func refreshLiveSessions(fileManager: FileManager) {
+        liveSessions.removeAll()
+        guard fileManager.fileExists(atPath: activeSessionsFile.path) else { return }
         do {
-            let data = try Data(contentsOf: activeSessionsFile)
-            let records = try JSONDecoder().decode([ActiveSessionRecord].self, from: data)
-            var alive: Set<String> = []
-            var zombieCount = 0
-            for record in records {
-                if isProcessAlive(pid: record.pid) {
-                    alive.insert(record.sessionId)
-                } else {
-                    zombieCount += 1
+            let records = try JSONDecoder().decode([ActiveSessionRecord].self, from: Data(contentsOf: activeSessionsFile))
+            let root = sessionsRoot.standardizedFileURL.path + "/"
+            for pid in Set(records.map(\.pid)) where pid > 0 {
+                guard let inspected = inspectProcess(pid) else {
+                    if inspectionFailures.insert(pid).inserted {
+                        logger.info("Grok 宿主未确认或已退出: pid=\(pid, privacy: .public)")
+                    }
+                    continue
+                }
+                let host = GrokProcessSnapshot(startedAt: inspected.startedAt,
+                    openFiles: Set(inspected.openFiles.map { URL(filePath: $0).resolvingSymlinksInPath().path }))
+                inspectionFailures.remove(pid)
+                for path in host.openFiles where path.hasPrefix(root) && path.hasSuffix("/events.jsonl") {
+                    let sessionPath = URL(filePath: path).deletingLastPathComponent().path
+                    // 一个宿主可承载多个会话；关闭对应事件文件即撤销归属。
+                    if let previous = liveSessions[sessionPath] {
+                        liveSessions[sessionPath] = GrokProcessSnapshot(startedAt: min(previous.startedAt, host.startedAt), openFiles: previous.openFiles.union(host.openFiles))
+                    } else { liveSessions[sessionPath] = host }
                 }
             }
-            if zombieCount > 0 {
-                logger.debug("Grok active_sessions has \(zombieCount, privacy: .public) dead pid entries")
-            }
-            return alive
         } catch {
-            logger.error(
-                "Failed to read active_sessions: \(String(describing: error), privacy: .public)"
-            )
-            return []
+            logger.error("读取 Grok 活动登记失败: \(String(describing: error), privacy: .public)")
         }
-    }
-
-    /// 校验 pid 是否仍属于当前用户进程树中的存活进程
-    private func isProcessAlive(pid: Int32) -> Bool {
-        guard pid > 0 else { return false }
-        // kill(pid, 0) 仅检查存在性;EPERM 也表示进程存在
-        let result = kill(pid, 0)
-        if result == 0 {
-            return true
-        }
-        return errno == EPERM
     }
 
     // MARK: - 解析
@@ -433,7 +380,7 @@ public actor GrokSessionMonitor {
         sessionID: String,
         summaryModifiedAt: Date,
         eventsModifiedAt: Date?,
-        processAlive: Bool
+        host: GrokProcessSnapshot?
     ) throws -> SessionSummary {
         let summaryURL = sessionDir.appending(path: "summary.json")
         let summaryData = try Data(contentsOf: summaryURL)
@@ -444,32 +391,43 @@ public actor GrokSessionMonitor {
         let startedAt = summaryFile.createdAt.flatMap { parseISO8601($0) }
         let lastActive = summaryFile.lastActiveAt.flatMap { parseISO8601($0) }
             ?? summaryFile.updatedAt.flatMap { parseISO8601($0) }
-        let eventsURL = sessionDir.appending(path: "events.jsonl")
-        let turnState = parseTurnTail(eventsURL: eventsURL)
+        let state = runtime[sessionDir.path] ?? GrokRuntimeState()
+        runtime[sessionDir.path] = state
+        try state.refresh(at: sessionDir)
+        let backgroundCount = try host.map { try state.backgroundCount(at: sessionDir, host: $0, now: Date()) } ?? 0
+        // 宿主退出/重启后不能把残留后台任务静默当作「已完成」。保留未知，等待真实结束证据。
+        let unresolvedBackground = try backgroundCount == 0
+            && (state.backgroundCount(at: sessionDir,
+                host: GrokProcessSnapshot(startedAt: .distantPast, openFiles: []), now: Date())) > 0
+        let request = host.flatMap { state.pendingRequest(host: $0) }
         let eventsMtime = eventsModifiedAt ?? summaryModifiedAt
         let modifiedAt = max(summaryModifiedAt, eventsMtime, lastActive ?? .distantPast)
 
         let lifecycle: TurnLifecycleState
         let taskCompletedAt: Date?
 
-        switch turnState {
-        case .midTurn:
-            // 仅进程存活才算运行中;死进程 mid-turn 视为崩溃,不展示
-            lifecycle = processAlive ? .running : .unknown
+        if request != nil {
+            lifecycle = .waitingForUser
             taskCompletedAt = nil
-        case let .ended(at, outcome):
-            // 一轮结束 = agent 停住等用户下一步(或会话已退仍待确认)。
-            // 不得要求进程退出:交互式 TUI 常态就是进程活着等输入。
-            if outcome == nil || outcome == "completed" {
-                lifecycle = .completed
-                taskCompletedAt = at ?? lastActive ?? modifiedAt
-            } else {
-                lifecycle = .aborted
-                taskCompletedAt = nil
-            }
-        case .none:
+        } else if backgroundCount > 0 {
+            lifecycle = .running
+            taskCompletedAt = nil
+        } else if unresolvedBackground {
             lifecycle = .unknown
             taskCompletedAt = nil
+        } else {
+            switch state.turn {
+            case let .started(at):
+                lifecycle = host.map { (at ?? .distantPast) >= $0.startedAt } == true ? .running : .unknown
+                taskCompletedAt = nil
+            case let .ended(at, outcome):
+                lifecycle = outcome == nil || outcome == "completed" ? .completed : .aborted
+                taskCompletedAt = lifecycle == .completed
+                    ? max(at ?? lastActive ?? modifiedAt, state.lastWorkEndedAt ?? .distantPast) : nil
+            case .none:
+                lifecycle = .unknown
+                taskCompletedAt = nil
+            }
         }
 
         // 文案:有展示价值时再读 updates;否则用 title fallback,避免大文件 IO
@@ -497,7 +455,7 @@ public actor GrokSessionMonitor {
         }
 
         logger.debug(
-            "Parsed Grok session \(resolvedSessionID, privacy: .public): lifecycle=\(finalLifecycle.rawValue, privacy: .public), alive=\(processAlive, privacy: .public)"
+            "Parsed Grok session \(resolvedSessionID, privacy: .public): lifecycle=\(finalLifecycle.rawValue, privacy: .public), alive=\(host != nil, privacy: .public), background=\(backgroundCount, privacy: .public)"
         )
 
         return SessionSummary(
@@ -510,66 +468,23 @@ public actor GrokSessionMonitor {
             lifecycleState: finalLifecycle,
             taskCompletedAt: finalLifecycle == .completed ? taskCompletedAt : nil,
             lastAgentMessage: lastAgentMessage,
-            firstPrompt: firstPrompt
+            firstPrompt: firstPrompt,
+            pendingQuestion: request?.question,
+            pendingRequestID: request?.id,
+            runtimeVerified: host != nil,
+            backgroundTaskCount: backgroundCount
         )
-    }
-
-    /// 从 events.jsonl 尾部找最近 turn_started / turn_ended
-    private func parseTurnTail(eventsURL: URL) -> TurnTailState {
-        guard FileManager.default.fileExists(atPath: eventsURL.path) else {
-            return .none
-        }
-
-        do {
-            let handle = try FileHandle(forReadingFrom: eventsURL)
-            defer { try? handle.close() }
-
-            guard let size = try? handle.seekToEnd() else { return .none }
-            let offset = size > eventsTailByteLimit ? size - eventsTailByteLimit : 0
-            guard (try? handle.seek(toOffset: offset)) != nil,
-                  var data = try? handle.readToEnd() else {
-                return .none
-            }
-
-            if offset > 0 {
-                if let firstNewline = data.firstIndex(of: UInt8(ascii: "\n")) {
-                    data = Data(data.suffix(from: firstNewline + 1))
-                } else {
-                    data = Data()
-                }
-            }
-
-            guard let text = String(data: data, encoding: .utf8) else { return .none }
-            let decoder = JSONDecoder()
-
-            for line in text.split(separator: "\n", omittingEmptySubsequences: true).reversed() {
-                guard line.contains("turn_started") || line.contains("turn_ended") else { continue }
-                guard let event = try? decoder.decode(EventLine.self, from: Data(line.utf8)) else {
-                    continue
-                }
-                let ts = event.ts.flatMap { parseISO8601($0) }
-                switch event.type {
-                case "turn_ended":
-                    return .ended(at: ts, outcome: event.outcome)
-                case "turn_started":
-                    return .midTurn(startedAt: ts)
-                default:
-                    continue
-                }
-            }
-            return .none
-        } catch {
-            logger.error(
-                "Failed to read events.jsonl \(eventsURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
-            )
-            return .none
-        }
     }
 
     /// 限额扫描 updates.jsonl:首个 user_message_chunk + 最近一轮 agent_message_chunk
     private func parsePrompts(updatesURL: URL) -> (first: String?, last: String?) {
-        guard FileManager.default.fileExists(atPath: updatesURL.path) else {
+        let path = updatesURL.deletingLastPathComponent().path
+        guard let stamp = GrokFileStamp(updatesURL) else {
+            promptCache.removeValue(forKey: path)
             return (nil, nil)
+        }
+        if let cached = promptCache[path], cached.stamp == stamp {
+            return (cached.first, cached.last)
         }
 
         do {
@@ -597,6 +512,7 @@ public actor GrokSessionMonitor {
                 }
             }
             let lastAgent = extractLastAgentMessage(from: tailData)
+            promptCache[path] = (stamp, firstPrompt, lastAgent)
             return (firstPrompt, lastAgent)
         } catch {
             logger.error(
@@ -687,7 +603,6 @@ public actor GrokSessionMonitor {
 
     private func updateCachedSession(
         at sessionDir: URL,
-        aliveSessionIDs: Set<String>,
         fileManager: FileManager
     ) -> Bool {
         let path = sessionDir.path
@@ -712,32 +627,20 @@ public actor GrokSessionMonitor {
                 noteSubagent(sessionID)
                 return false
             }
-            let processAlive = aliveSessionIDs.contains(sessionID)
-            let fingerprint = CacheFingerprint(
-                summaryModifiedAt: summaryMtime,
-                eventsModifiedAt: eventsMtime,
-                processAlive: processAlive
-            )
-            if let entry = cache[path], entry.fingerprint == fingerprint {
-                return false
-            }
-
             let summary = try parseSessionDirectory(
                 at: sessionDir,
                 sessionID: sessionID,
                 summaryModifiedAt: summaryMtime,
                 eventsModifiedAt: eventsMtime,
-                processAlive: processAlive
+                host: liveSessions[path]
             )
-            cache[path] = CachedEntry(fingerprint: fingerprint, summary: summary)
+            cache[path] = CachedEntry(summary: summary)
             return true
         } catch {
             logger.error(
                 "Failed to incrementally parse Grok session \(path, privacy: .public): \(String(describing: error), privacy: .public)"
             )
-            if !fileManager.fileExists(atPath: path) {
-                cache.removeValue(forKey: path)
-            }
+            cache.removeValue(forKey: path)
             return false
         }
     }
@@ -745,18 +648,18 @@ public actor GrokSessionMonitor {
     private func cachedSummaries() -> [SessionSummary] {
         Array(cache.values.map(\.summary))
             .sorted { $0.modifiedAt > $1.modifiedAt }
-            .prefix(maxFiles)
-            .map { $0 }
+    }
+
+    private func retainedHistoryPaths() -> Set<String> {
+        Set(cache.values.map(\.summary).filter { $0.runtimeVerified != true }
+            .sorted { $0.modifiedAt > $1.modifiedAt }.prefix(maxFiles).map(\.filePath))
     }
 
     private func trimCacheToMaxFiles() {
-        let keepPaths = Set(
-            cache
-                .sorted { $0.value.summary.modifiedAt > $1.value.summary.modifiedAt }
-                .prefix(maxFiles)
-                .map(\.key)
-        )
-        cache = cache.filter { keepPaths.contains($0.key) }
+        let history = retainedHistoryPaths()
+        cache = cache.filter { $0.value.summary.runtimeVerified == true || history.contains($0.key) }
+        runtime = runtime.filter { cache[$0.key] != nil }
+        promptCache = promptCache.filter { cache[$0.key] != nil }
     }
 
     /// 从任意变更路径向上找到含 summary.json 的 session 目录

@@ -9,6 +9,7 @@ struct PanelRoot: View {
     @ObservedObject var viewModel: AppViewModel
     /// 右键菜单「隐藏浮窗」回调(由 FloatingPanelController 注入)
     let onHide: () -> Void
+    let onContentSizeChange: (CGSize) -> Void
 
     var body: some View {
         content
@@ -22,6 +23,11 @@ struct PanelRoot: View {
             .contextMenu { contextMenuItems }
             // fixedSize:面板取理想尺寸,由浮窗控制器同步窗口尺寸
             .fixedSize()
+            .onGeometryChange(for: CGSize.self) { proxy in
+                proxy.size
+            } action: { size in
+                onContentSizeChange(size)
+            }
             .animation(DS.Anim.state, value: viewModel.snapshot)
             // 出现新待办时向 VoiceOver 播报
             .onChange(of: viewModel.snapshot.todos.count) { oldCount, newCount in

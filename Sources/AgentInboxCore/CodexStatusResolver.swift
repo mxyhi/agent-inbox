@@ -35,13 +35,14 @@ public struct AgentStatusResolver: Sendable {
             .filter {
                 $0.lifecycleState == .waitingForUser
                     && acknowledgedRequests[$0.id] != $0.requestAcknowledgementID
-                    && now.timeIntervalSince($0.modifiedAt) <= todoRetentionInterval
+                    && ($0.runtimeVerified == true || now.timeIntervalSince($0.modifiedAt) <= todoRetentionInterval)
             }
             .sorted { $0.modifiedAt > $1.modifiedAt }
 
         // 运行中:lifecycle 仍是 running,并且最近仍有写入
         let running = summaries
-            .filter { $0.lifecycleState == .running && now.timeIntervalSince($0.modifiedAt) <= staleRunningInterval }
+            .filter { $0.lifecycleState == .running
+                && ($0.runtimeVerified == true || now.timeIntervalSince($0.modifiedAt) <= staleRunningInterval) }
             .sorted { $0.modifiedAt > $1.modifiedAt }
 
         // 待办:completed、用户尚未确认、仍在时效窗口;按完成时间降序

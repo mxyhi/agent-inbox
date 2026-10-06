@@ -247,6 +247,10 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
     public let pendingQuestion: String?
     /// 当前待处理请求的稳定标识；普通日志追加不能改变它。
     public let pendingRequestID: String?
+    /// 本次扫描是否已核实会话的活宿主；静默工作不能被日志时效过滤。
+    public let runtimeVerified: Bool?
+    /// 仍活跃的后台命令、监控、调度与子代理总数。
+    public let backgroundTaskCount: Int?
 
     public init(
         provider: AgentProvider = .codex,
@@ -260,7 +264,9 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
         lastAgentMessage: String?,
         firstPrompt: String? = nil,
         pendingQuestion: String? = nil,
-        pendingRequestID: String? = nil
+        pendingRequestID: String? = nil,
+        runtimeVerified: Bool? = nil,
+        backgroundTaskCount: Int? = nil
     ) {
         self.provider = provider
         self.sessionID = sessionID
@@ -274,6 +280,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
         self.firstPrompt = firstPrompt
         self.pendingQuestion = pendingQuestion
         self.pendingRequestID = pendingRequestID
+        self.runtimeVerified = runtimeVerified
+        self.backgroundTaskCount = backgroundTaskCount
     }
 
     /// 未提供源请求标识时按问题内容确认，避免把文件更新时间当作新请求。
