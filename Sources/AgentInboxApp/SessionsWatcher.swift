@@ -2,7 +2,7 @@ import CoreServices
 import Foundation
 import OSLog
 
-/// 多根目录 FSEvents 包装器:被动监听 Codex/Grok 会话路径变更。
+/// 多根目录 FSEvents 包装器:被动监听各源会话路径变更。
 /// 只上报变更路径;状态真值仍由各 SessionMonitor 解析。
 final class SessionsWatcher {
     private let roots: [URL]

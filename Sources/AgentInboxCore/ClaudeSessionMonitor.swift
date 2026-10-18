@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import OSLog
 
@@ -163,8 +164,12 @@ public actor ClaudeSessionMonitor {
             return []
         }
 
-        let liveStatuses = loadLiveStatusesIfNeeded(fileManager: fileManager)
         let files = recentTranscriptFiles(fileManager: fileManager)
+        guard !files.isEmpty else {
+            cache.removeAll()
+            return []
+        }
+        let liveStatuses = loadLiveStatusesIfNeeded(fileManager: fileManager)
         var summaries: [SessionSummary] = []
         summaries.reserveCapacity(files.count)
         var cacheHits = 0
@@ -567,16 +572,40 @@ public actor ClaudeSessionMonitor {
         environment.removeValue(forKey: "CLAUDE_CODE_ENTRYPOINT")
         process.environment = environment
         let outputPipe = Pipe()
-        let errorPipe = Pipe()
         process.standardOutput = outputPipe
-        process.standardError = errorPipe
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
 
         do {
             try process.run()
-            process.waitUntilExit()
-            let output = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            try? outputPipe.fileHandleForWriting.close()
+            // 这是只读查询子进程；硬截止避免 CLI 忽略 SIGTERM 后永久占住扫描。
+            let timeout = DispatchWorkItem { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3, execute: timeout)
+            var waitedForExit = false
+            defer {
+                timeout.cancel()
+                try? outputPipe.fileHandleForReading.close()
+                if !waitedForExit {
+                    if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                    finished.wait()
+                }
+            }
+            // 先排空 stdout 再等退出；会话多时输出可能超过管道容量，反过来会永久互等。
+            var output = Data()
+            while let chunk = try outputPipe.fileHandleForReading.read(upToCount: 64 * 1024), !chunk.isEmpty {
+                output.append(chunk)
+                guard output.count <= 1024 * 1024 else {
+                    liveStatusCache = [:]
+                    logger.warning("Claude agents output exceeded 1 MiB; using transcript lifecycle")
+                    return [:]
+                }
+            }
+            finished.wait()
+            waitedForExit = true
             guard process.terminationStatus == 0 else {
-                _ = errorPipe.fileHandleForReading.readDataToEndOfFile()
                 logger.warning(
                     "Claude agents command failed: status=\(process.terminationStatus)"
                 )

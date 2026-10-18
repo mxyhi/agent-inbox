@@ -247,12 +247,48 @@ func compositeMonitorMergesClaudeAndPublishesItsWatchRoot() async throws {
             sessionsRoot: grokRoot,
             activeSessionsFile: temporaryRoot.appending(path: "active_sessions.json")
         ),
-        claude: claude
+        claude: claude,
+        dsh: DshSessionMonitor(sessionsRoot: temporaryRoot.appending(path: "dsh"))
     )
     let summaries = await composite.scan()
 
     #expect(summaries.map(\.id) == ["claude:claude-composite"])
     #expect(composite.watchRoots.contains(claudeRoot))
+}
+
+@Test
+func claudeLiveStatusDrainsOutputLargerThanPipeCapacity() async throws {
+    let root = try makeTemporaryClaudeProjectsRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    _ = try writeClaudeTranscript(root: root, project: "project", name: "target.jsonl", body: """
+    {"type":"user","sessionId":"target","message":{"role":"user","content":"工作"}}
+    {"type":"system","subtype":"turn_duration","sessionId":"target"}
+    """, modifiedAt: Date())
+    var rows = (0..<4_000).map { ["sessionId": "other-\($0)", "status": "idle"] }
+    rows.append(["sessionId": "target", "status": "active"])
+    let json = String(decoding: try JSONSerialization.data(withJSONObject: rows), as: UTF8.self)
+    let executable = root.appending(path: "fake-claude")
+    try Data("#!/bin/sh\nprintf '%s' '\(json)'\n".utf8).write(to: executable)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+    let monitor = ClaudeSessionMonitor(sessionsRoot: root, claudeExecutableURL: executable)
+    #expect(await monitor.scan().first?.lifecycleState == .running)
+}
+
+@Test
+func claudeHungLiveStatusFallsBackWithinDeadline() async throws {
+    let root = try makeTemporaryClaudeProjectsRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    _ = try writeClaudeTranscript(root: root, project: "project", name: "target.jsonl", body: """
+    {"type":"user","sessionId":"target","message":{"role":"user","content":"工作"}}
+    {"type":"system","subtype":"turn_duration","sessionId":"target"}
+    """, modifiedAt: Date())
+    let executable = root.appending(path: "fake-claude")
+    try Data("#!/bin/sh\ntrap '' TERM\nexec /bin/sleep 30\n".utf8).write(to: executable)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+    let start = Date()
+    let monitor = ClaudeSessionMonitor(sessionsRoot: root, claudeExecutableURL: executable)
+    #expect(await monitor.scan().first?.lifecycleState == .completed)
+    #expect(Date().timeIntervalSince(start) < 10)
 }
 
 private func makeTemporaryClaudeProjectsRoot() throws -> URL {

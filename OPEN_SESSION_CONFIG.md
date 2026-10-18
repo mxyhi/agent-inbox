@@ -1,6 +1,6 @@
 # 会话打开配置
 
-Agent Inbox 支持通过配置自定义如何打开 Codex、Grok、Claude 会话工作目录。
+Agent Inbox 支持通过配置自定义如何打开 Codex、Grok、Claude、DSH 会话工作目录。
 
 ## 功能概述
 
@@ -46,6 +46,17 @@ Agent Inbox 支持通过配置自定义如何打开 Codex、Grok、Claude 会话
 | `$project_name` | 项目名称（cwd 最后一段） | `my-project` |
 
 ## 示例命令
+
+### DSH 会话
+
+DSH 同样支持现有的工作目录打开方式，`$provider` 为 `dsh`，`$session_id` 保留原生 ID。
+如果安装并配置了支持恢复会话的 `tui` profile，可在终端使用：
+
+```bash
+dsh tui --resume "$session_id"
+```
+
+`tui` 不是必然存在的 profile；当前 `web` profile 的 CLI 不接受 `--resume`。Web 会话需在已运行的 DSH 页面中选择，不把启动新服务当成定位现有会话。
 
 ### 使用 Cursor 编辑器打开
 ```bash

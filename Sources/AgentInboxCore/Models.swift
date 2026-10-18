@@ -73,6 +73,7 @@ public enum AgentProvider: String, Codable, CaseIterable, Sendable, Identifiable
     case codex
     case grok
     case claude
+    case dsh
 
     public var id: String { rawValue }
 
@@ -85,6 +86,8 @@ public enum AgentProvider: String, Codable, CaseIterable, Sendable, Identifiable
             "Grok"
         case .claude:
             "Claude"
+        case .dsh:
+            "DSH"
         }
     }
 }
@@ -425,7 +428,7 @@ public struct OpenSessionConfig: Codable, Equatable, Sendable {
     /// 支持的模板变量列表（用于 UI 提示）
     public static let supportedVariables: [(name: String, description: String)] = [
         ("$session_id", "源原生会话 ID"),
-        ("$provider", "会话源(codex/grok/claude)"),
+        ("$provider", "会话源(codex/grok/claude/dsh)"),
         ("$cwd", "工作目录路径"),
         ("$file_path", "会话文件或目录路径"),
         ("$project_name", "项目名称")
@@ -437,6 +440,7 @@ public struct OpenSessionConfig: Codable, Equatable, Sendable {
         "code \"$cwd\"",
         "cursor \"$cwd\"",
         "claude --resume \"$session_id\"",
+        "dsh tui --resume \"$session_id\"",
         "echo \"Opening session $session_id at $cwd\""
     ]
 }

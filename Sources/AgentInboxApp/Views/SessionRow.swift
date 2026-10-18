@@ -409,7 +409,7 @@ private extension String {
 
 // MARK: - 源标签
 
-/// 混排列表里用克制 secondary 标签区分 Codex / Grok / Claude
+/// 混排列表里用克制 secondary 标签区分会话源
 struct ProviderTag: View {
     let provider: AgentProvider
 
