@@ -39,6 +39,7 @@ public actor CodexSessionMonitor {
         let lastAgentMessage: String?
         /// user_message:用户输入原文(可能是几 KB 的终端粘贴,含多行/ASCII art),存前需清洗截断
         let message: String?
+        let item: UserMessageItem?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -48,7 +49,17 @@ public actor CodexSessionMonitor {
             case timestamp
             case lastAgentMessage = "last_agent_message"
             case message
+            case item
         }
+    }
+
+    private struct UserMessageItem: Decodable {
+        struct Content: Decodable {
+            let type: String?
+            let text: String?
+        }
+        let type: String?
+        let content: [Content]?
     }
 
     /// head 解析结果:session_meta 三元组 + 首个用户提示词
@@ -56,7 +67,7 @@ public actor CodexSessionMonitor {
         var sessionID: String?
         var cwd: String?
         var startedAt: Date?
-        /// 首个 event_msg/user_message 的清洗后提示词;nil = head 窗口内未捕获到用户输入
+        /// 首个真实用户消息的清洗后提示词；nil = head 窗口内未捕获到用户输入。
         var firstPrompt: String?
     }
 
@@ -387,7 +398,7 @@ public actor CodexSessionMonitor {
             lifecycleState: visible.lifecycleState,
             taskCompletedAt: visible.taskCompletedAt,
             lastAgentMessage: visible.lastAgentMessage,
-            firstPrompt: head.firstPrompt, // head 扫描出的首个 user_message(清洗截断后)
+            firstPrompt: head.firstPrompt, // head 扫描出的首个真实用户消息（清洗截断后）
             pendingQuestion: visible.unansweredQuestions.first?.title,
             pendingRequestID: visible.pendingRequestID
         )
@@ -395,7 +406,7 @@ public actor CodexSessionMonitor {
     }
 
     /// 读文件头 headByteLimit 字节:第 0 行取 session_meta(id/cwd/startedAt),
-    /// 再逐行扫描缓冲区内所有完整行,取首个 event_msg/user_message 作为真实用户提示词。
+    /// 再逐行扫描完整事件，兼容 user_message 与 item_completed/UserMessage。
     private func parseHead(handle: FileHandle, decoder: JSONDecoder, url: URL) -> HeadInfo {
         guard let raw = try? handle.read(upToCount: headByteLimit), !raw.isEmpty else {
             logger.warning("Failed to read rollout head: \(url.path, privacy: .public)")
@@ -423,20 +434,27 @@ public actor CodexSessionMonitor {
             logger.warning("Rollout head is not a valid session_meta: \(url.path, privacy: .public)")
         }
 
-        // —— 首个用户提示词 —— 真提示词是缓冲区里首个 event_msg/user_message
+        // —— 首个用户提示词 —— 兼容旧 user_message 与新版 item_completed/UserMessage。
         // (response_item 的 role==user 是注入的 AGENTS.md/环境上下文,会被下面的 type 判定天然跳过)。
         // 只保留最后一个换行前的「完整行」,丢弃 256KB 边界可能截断的残行(否则整段 UTF-8 解码可能失败)。
         if let lastNewline = raw.lastIndex(of: UInt8(ascii: "\n")),
            let text = String(data: Data(raw.prefix(upTo: lastNewline)), encoding: .utf8) {
             for candidate in text.split(separator: "\n", omittingEmptySubsequences: true) {
-                // 子串预筛:绝大多数行不是 user_message,先用包含判断跳过,避免逐行 JSON 解码开销(与流式状态解析一致)
-                guard candidate.contains("\"user_message\"") else { continue }
+                guard candidate.contains("\"user_message\"") || candidate.contains("\"UserMessage\"") else { continue }
                 guard let parsed = try? decoder.decode(RolloutLine.self, from: Data(candidate.utf8)),
                       parsed.type == "event_msg",
-                      parsed.payload?.type == "user_message",
-                      let message = parsed.payload?.message else { continue }
+                      let payload = parsed.payload else { continue }
+                let message: String?
+                if payload.type == "user_message" {
+                    message = payload.message
+                } else if payload.type == "item_completed", payload.item?.type == "UserMessage" {
+                    message = payload.item?.content?.filter { $0.type == "text" }.compactMap(\.text).joined(separator: "\n")
+                } else {
+                    continue
+                }
                 // 命中首个真实用户提示词,清洗后写入并停止扫描
-                info.firstPrompt = sanitizeFirstPrompt(message)
+                guard let message, let prompt = sanitizeFirstPrompt(message) else { continue }
+                info.firstPrompt = prompt
                 break
             }
         }

@@ -13,6 +13,9 @@ struct CodexRolloutState {
         let type: String?
         let last_agent_message: String?
         let item: Item?
+        let name: String?
+        let arguments: String?
+        let call_id: String?
     }
 
     private struct Item: Decodable {
@@ -24,10 +27,15 @@ struct CodexRolloutState {
 
     private struct Question: Decodable { let title: String? }
     private struct Content: Decodable { let text: String? }
+    private struct InputArguments: Decodable {
+        struct Question: Decodable { let question: String }
+        let questions: [Question]
+    }
 
     struct PendingQuestion {
         let id: String
         let title: String
+        var callID: String? = nil
     }
 
     private static let logger = Logger(subsystem: "agent-inbox", category: "CodexRolloutState")
@@ -95,7 +103,7 @@ struct CodexRolloutState {
         return preview
     }
 
-    /// 只归并 event_msg，工具结果或注入内容中的同名字段不能冒充状态事件。
+    /// 仅消费结构化事件和白名单工具调用；正文里的协议字段不能冒充状态事件。
     private mutating func consume(
         _ data: Data,
         decoder: JSONDecoder,
@@ -103,10 +111,35 @@ struct CodexRolloutState {
         parseDate: (String) -> Date?
     ) {
         // 在字节层筛选 ASCII 协议标记，避免为大段工具输出执行 Unicode 子串匹配。
-        guard data.range(of: Self.eventEnvelopeMarker) != nil,
-              Self.eventMarkers.contains(where: { data.range(of: $0) != nil }),
+        let isEvent = data.range(of: Self.eventEnvelopeMarker) != nil
+            && Self.eventMarkers.contains(where: { data.range(of: $0) != nil })
+        // 工具结果只在有对应待回复时解码，不解码或保留全部历史工具输出。
+        let isInputCall = data.range(of: Self.inputCallMarker) != nil
+        let isPendingResult = unansweredQuestions.contains { $0.callID != nil }
+            && data.range(of: Self.callOutputMarker) != nil
+        guard isEvent || isInputCall || isPendingResult,
               let event = try? decoder.decode(Event.self, from: data),
-              event.type == "event_msg", let payload = event.payload else { return }
+              let payload = event.payload else { return }
+
+        if event.type == "response_item" {
+            if payload.type == "function_call", payload.name == "request_user_input",
+               let callID = payload.call_id, !callID.isEmpty,
+               let arguments = payload.arguments,
+               let input = try? decoder.decode(InputArguments.self, from: Data(arguments.utf8)) {
+                // 新版不会持久化 RequestUserInput 事件，必须用调用与结果的 call_id 配对。
+                let incoming = input.questions.enumerated().compactMap { index, question -> PendingQuestion? in
+                    guard !question.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                    return PendingQuestion(id: "call:\(callID):\(index)", title: question.question, callID: callID)
+                }
+                guard !incoming.isEmpty,
+                      incoming.map(\.id) != unansweredQuestions.map(\.id) else { return }
+                replaceQuestions(incoming)
+            } else if payload.type == "function_call_output", let callID = payload.call_id {
+                consumeToolResult(callID)
+            }
+            return
+        }
+        guard event.type == "event_msg" else { return }
 
         switch payload.type {
         case "task_started", "turn_started":
@@ -145,22 +178,11 @@ struct CodexRolloutState {
                 }
                 guard !incoming.isEmpty else { return }
                 // ponytail: 文案相同视为同一次请求，保留原标识。Codex 若用相同标题发出新的一次提问，再按事件偏移区分。
-                if incoming.map(\.title) == unansweredQuestions.map(\.title) {
+                if unansweredQuestions.allSatisfy({ $0.callID == nil }),
+                   incoming.map(\.title) == unansweredQuestions.map(\.title) {
                     return
                 }
-                if !unansweredQuestions.isEmpty || lifecycle == .waitingForUser {
-                    let previousCount = unansweredQuestions.count
-                    let nextCount = incoming.count
-                    Self.logger.info(
-                        "新问题替换同一会话的旧待办: previous=\(previousCount, privacy: .public) next=\(nextCount, privacy: .public)"
-                    )
-                }
-                unansweredQuestions = incoming
-                // 问题是覆盖层。底下若是更早的审批，回答后不能把那条旧请求找回来。
-                if lifecycle == .waitingForUser {
-                    lifecycle = taskCompletedAt == nil ? .running : .completed
-                    waitingRequestID = nil
-                }
+                replaceQuestions(incoming)
             } else if item.type == "UserMessage" {
                 consumeAnswer(item.content?.compactMap(\.text).joined(separator: "\n"))
             }
@@ -169,18 +191,42 @@ struct CodexRolloutState {
         }
     }
 
-    /// 引用回答仅消费对应标题；重复回答不能误清其他问题，普通新输入消费旧问题。
+    private mutating func replaceQuestions(_ incoming: [PendingQuestion]) {
+        let previousCount = unansweredQuestions.count
+        Self.logger.info(
+            "更新待回复问题: previous=\(previousCount, privacy: .public) next=\(incoming.count, privacy: .public) toolCall=\(incoming.first?.callID != nil, privacy: .public)"
+        )
+        unansweredQuestions = incoming
+        // 问题是覆盖层。底下若是更早的审批，回答后不能把那条旧请求找回来。
+        if lifecycle == .waitingForUser {
+            lifecycle = taskCompletedAt == nil ? .running : .completed
+            waitingRequestID = nil
+        }
+    }
+
+    private mutating func consumeToolResult(_ callID: String) {
+        let count = unansweredQuestions.count
+        unansweredQuestions.removeAll { $0.callID == callID }
+        let removedCount = count - unansweredQuestions.count
+        if removedCount > 0 {
+            Self.logger.info("提问工具已返回，清除对应待回复: count=\(removedCount, privacy: .public)")
+        }
+    }
+
+    /// 文本回答仅消费异步问题；工具提问必须等匹配结果或显式取消，避免插入消息误清。
     private mutating func consumeAnswer(_ message: String?) {
         guard let message, !message.isEmpty, !unansweredQuestions.isEmpty else { return }
         if message.hasPrefix("> "), let separator = message.range(of: "\n\n") {
             let title = String(message[message.index(message.startIndex, offsetBy: 2)..<separator.lowerBound])
-            unansweredQuestions.removeAll { $0.title == title }
+            unansweredQuestions.removeAll { $0.callID == nil && $0.title == title }
         } else {
-            unansweredQuestions.removeAll()
+            unansweredQuestions.removeAll { $0.callID == nil }
         }
     }
 
     private static let eventEnvelopeMarker = Data("\"event_msg\"".utf8)
+    private static let inputCallMarker = Data("\"request_user_input\"".utf8)
+    private static let callOutputMarker = Data("\"function_call_output\"".utf8)
     private static let eventMarkers = [
         "task_started", "turn_started", "task_complete", "turn_complete", "turn_aborted",
         "thread_rolled_back", "exec_approval_request", "apply_patch_approval_request",
