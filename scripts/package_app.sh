@@ -115,7 +115,7 @@ plutil -insert CFBundlePackageType -string "APPL" "${INFO_PLIST}"
 plutil -insert CFBundleShortVersionString -string "${VERSION}" "${INFO_PLIST}"
 plutil -insert CFBundleVersion -string "${BUILD_NUMBER}" "${INFO_PLIST}"
 plutil -insert LSMinimumSystemVersion -string "14.0" "${INFO_PLIST}"
-plutil -insert LSUIElement -bool true "${INFO_PLIST}"
+# 不写 LSUIElement：便签窗口层（源自 tic）是 Dock + 菜单栏双入口，启动时设为 .regular。
 plutil -insert NSHighResolutionCapable -bool true "${INFO_PLIST}"
 
 if [[ -n "${FEED_URL}" && -n "${PUBLIC_ED_KEY}" ]]; then

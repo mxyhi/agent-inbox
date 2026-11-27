@@ -1,713 +1,306 @@
-import AppKit
 import AgentInboxCore
+import AppKit
 import SwiftUI
 
-// MARK: - 设置分类
-
-/// 设置分类 —— 侧边栏每一项对应右侧一个面板
-/// 后续新增设置项:在此追加一个 case,再补一个对应的 *SettingsSection 子视图即可
-enum SettingsCategory: String, CaseIterable, Identifiable, Hashable {
-    case panel   // 浮窗行为
-    case open    // 打开方式
-    case data    // 数据来源
-    case filter  // firstPrompt 过滤
-    case network // 更新网络
-    case about   // 关于
-
-    var id: String { rawValue }
-
-    /// 侧边栏显示名
-    var label: String {
-        switch self {
-        case .panel: return "浮窗"
-        case .open: return "打开方式"
-        case .data: return "数据"
-        case .filter: return "过滤"
-        case .network: return "网络"
-        case .about: return "关于"
-        }
-    }
-
-    /// 侧边栏图标(SF Symbol)
-    var systemImage: String {
-        switch self {
-        case .panel: return "macwindow"
-        case .open: return "arrow.up.forward.square"
-        case .data: return "externaldrive"
-        case .filter: return "line.3.horizontal.decrease.circle"
-        case .network: return "network"
-        case .about: return "info.circle"
-        }
-    }
-}
-
-// MARK: - 设置窗口
-
-/// 设置窗口 —— 左侧分类栏 + 右侧详情,仿 macOS 系统设置
-/// 固定 frame + 明确列宽,规避 NavigationSplitView 放进 Settings 场景时的尺寸自适应小毛病
+/// The Settings window (⌘, · the menu-bar menu): a standard macOS `Settings` scene with grouped-form
+/// tabs. Everything here is a thin view over `AppModel` — the launch item, Sparkle, `FolderSync`, the MCP
+/// service and `InboxModel` (Agent Inbox tab) own the actual behaviour.
 struct SettingsView: View {
-    @ObservedObject var viewModel: AppViewModel
-    @ObservedObject var updateController: AppUpdateController
-
-    // 当前选中分类;List 单选绑定要求可选类型,默认停在「浮窗」
-    @State private var selection: SettingsCategory? = .panel
+    /// Remembered, so Settings reopens on the tab it was left on.
+    @AppStorage(SettingsTab.storageKey) private var tab = SettingsTab.inbox
 
     var body: some View {
-        NavigationSplitView {
-            // 左侧分类栏
-            List(SettingsCategory.allCases, selection: $selection) { category in
-                Label(category.label, systemImage: category.systemImage)
-                    .tag(category)
-            }
-            // 分类名都是两字,固定窄宽即可,顺带禁掉拖拽变宽
-            .navigationSplitViewColumnWidth(140)
-            .listStyle(.sidebar)
-            // 设置窗口的分类栏应常驻,移除工具栏里那个折叠侧边栏的按钮
-            .toolbar(removing: .sidebarToggle)
-        } detail: {
-            // 右侧详情:按选中分类切换对应面板(nil 兜底回浮窗)
-            detail(for: selection ?? .panel)
-                .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
+        TabView(selection: $tab) {
+            InboxSettings().tabItem { Label("Agent Inbox", systemImage: "tray") }.tag(SettingsTab.inbox)
+            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }.tag(SettingsTab.general)
+            SyncSettings().tabItem { Label("Sync", systemImage: "arrow.triangle.2.circlepath") }.tag(SettingsTab.sync)
+            AgentsSettings().tabItem { Label("AI Agents", systemImage: "sparkles") }.tag(SettingsTab.agents)
         }
-        .navigationSplitViewStyle(.balanced)
-        // 设置窗口尺寸:侧边栏 140pt + 详情区 560pt = 700pt 总宽;高度 540pt 给表单和列表足够空间
-        .frame(width: 700, height: 540)
-    }
-
-    /// 分类 → 详情面板
-    @ViewBuilder
-    private func detail(for category: SettingsCategory) -> some View {
-        switch category {
-        case .panel:
-            PanelSettingsSection(viewModel: viewModel)
-        case .open:
-            OpenSettingsSection(viewModel: viewModel)
-        case .data:
-            DataSettingsSection()
-        case .filter:
-            FilterSettingsSection(viewModel: viewModel)
-        case .network:
-            NetworkSettingsSection(viewModel: viewModel, updateController: updateController)
-        case .about:
-            AboutSettingsSection(updateController: updateController)
-        }
+        .frame(width: 560)
     }
 }
 
-// MARK: - 各分类面板
+/// A small "Experimental" capsule for features still finding their feet (sync, for now).
+struct ExperimentalTag: View {
+    var body: some View {
+        Text("Experimental")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(Color.orange.opacity(0.15)))
+            .help("Sync is new and still experimental")
+    }
+}
 
-/// 浮窗行为
-private struct PanelSettingsSection: View {
-    @ObservedObject var viewModel: AppViewModel
+enum SettingsTab: String {
+    case inbox, general, sync, agents
+    static let storageKey = "settingsTab"
+}
+
+/// "today at 17:42", "yesterday at 09:10", "3 Nov at 17:42".
+private func settingsWhen(_ date: Date) -> String {
+    let time = date.formatted(date: .omitted, time: .shortened)
+    let calendar = Calendar.current
+    if calendar.isDateInToday(date) { return "today at \(time)" }
+    if calendar.isDateInYesterday(date) { return "yesterday at \(time)" }
+    return "\(date.formatted(.dateTime.day().month(.abbreviated))) at \(time)"
+}
+
+// MARK: - General
+
+private struct GeneralSettings: View {
+    @State private var model = AppModel.shared
 
     var body: some View {
         Form {
             Section {
-                Picker("置顶模式", selection: Binding(
-                    get: { viewModel.pinMode },
-                    set: { viewModel.setPinMode($0) }
-                )) {
-                    ForEach(PinMode.allCases) { mode in
-                        Text(mode.label).tag(mode)
-                    }
+                Toggle(isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) })) {
+                    Text("Launch at Login")
+                    Text("Open Agent Inbox and its notes when you log in.")
                 }
-                .pickerStyle(.radioGroup)
+            }
+            Section("Docked tabs") {
+                Picker("On hover, tabs show", selection: Binding(get: { model.dockTabStyle }, set: { model.setDockTabStyle($0) })) {
+                    ForEach(DockTabStyle.allCases) { Text($0.label).tag($0) }
+                }
+                Toggle(isOn: Binding(get: { model.tabsOverFullScreen }, set: { model.setTabsOverFullScreen($0) })) {
+                    Text("Show tabs over full-screen apps")
+                    Text("Docked tabs also appear on every desktop and over apps in full screen.")
+                }
+            }
+            Section("Privacy") {
+                Toggle(isOn: Binding(get: { model.everyListPrivate }, set: { model.setEveryListPrivate($0) })) {
+                    Text("Treat every list as private")
+                    Text("Keep every list out of screen shares where macOS allows, and cover it with Cover Private Lists.")
+                }
+            }
+            Section("About") {
+                LabeledContent("Version", value: AppVersion.displayValue(
+                    shortVersionString: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+                ))
+                LabeledContent {
+                    Button("检查更新…") { model.updater.checkForUpdates() }
+                        .disabled(!model.updater.canCheckForUpdates)
+                } label: {
+                    Text(model.updater.canCheckForUpdates ? "通过 Sparkle 自动检查更新" : "更新需要打包后的 app")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(height: 470)
+    }
+}
 
-                LabeledContent("浮窗位置") {
-                    Button("重置到右上角") {
-                        // 拖丢了找回来:FloatingPanelController 监听此通知归位并清空持久化
-                        NotificationCenter.default.post(name: .resetPanelPosition, object: nil)
+// MARK: - Sync
+
+private struct SyncSettings: View {
+    @State private var model = AppModel.shared
+    private var sync: FolderSync { model.sync }
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(isOn: Binding(get: { sync.isEnabled }, set: { sync.setEnabled($0) })) {
+                    HStack(spacing: 6) {
+                        Text("Sync lists between Macs")
+                        ExperimentalTag()
                     }
+                    Text("Only the lists you choose. Which lists are open, and where they sit, stay on each Mac.")
                 }
             } footer: {
-                Text("浮窗可整体拖动,位置会自动记住")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Sync is new and still experimental. If a list looks wrong, turn sync off for it and "
+                          + "tell us what happened.", systemImage: "flask")
+                    Link("Report a Problem…", destination: URL(string: "https://github.com/mxyhi/agent-inbox/issues/new")!)
+                }
+                .foregroundStyle(.secondary)
             }
-        }
-        .formStyle(.grouped)
-    }
-}
-
-/// 数据来源(只读路径)
-private struct DataSettingsSection: View {
-    var body: some View {
-        Form {
             Section {
-                LabeledContent("Codex 会话目录") {
-                    Text("~/.codex/sessions")
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-
-                LabeledContent("Grok 会话目录") {
-                    Text("~/.grok/sessions")
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-
-                LabeledContent("Claude 会话目录") {
-                    Text("~/.claude/projects")
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-
-                LabeledContent("DSH 会话目录") {
-                    Text(DshSessionMonitor.defaultSessionsRoot.path)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-
-                LabeledContent("状态存储") {
-                    Text("~/Library/Application Support/Agent Inbox")
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
-        }
-        .formStyle(.grouped)
-    }
-}
-
-/// 打开方式配置
-private struct OpenSettingsSection: View {
-    @ObservedObject var viewModel: AppViewModel
-
-    @State private var method: OpenSessionMethod
-    @State private var customCommand: String
-    @State private var isTestingCommand = false
-    @State private var testResult: String?
-
-    init(viewModel: AppViewModel) {
-        self.viewModel = viewModel
-        _method = State(initialValue: viewModel.openSessionConfig.method)
-        _customCommand = State(initialValue: viewModel.openSessionConfig.customCommand)
-    }
-
-    var body: some View {
-        Form {
-            Section {
-                // 打开方式选择器
-                Picker("打开方式", selection: $method) {
-                    ForEach(OpenSessionMethod.allCases) { method in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(method.label)
-                                .font(.body)
-                            Text(method.description)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .tag(method)
+                HStack {
+                    Label {
+                        Text(sync.folderDisplayName ?? "No folder chosen")
+                    } icon: {
+                        Image(systemName: "folder.fill").foregroundStyle(.tint)
                     }
+                    Spacer()
+                    Button("Choose…") { sync.chooseFolder() }
                 }
-                .pickerStyle(.radioGroup)
-                .onChange(of: method) { _, newValue in
-                    saveConfig()
+                .disabled(!sync.isEnabled)
+                if sync.isEnabled, let problem = sync.problem {
+                    Label(problem, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
                 }
-
-                // 自定义命令配置区域（仅在选择自定义时显示）
-                if method == .custom {
-                    Divider()
-                        .padding(.vertical, 4)
-
-                    // 命令模板输入
-                    LabeledContent {
-                        TextField("", text: $customCommand, axis: .vertical)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 12, design: .monospaced))
-                            .lineLimit(2...4)
-                            .multilineTextAlignment(.leading) // 强制左对齐
-                            .onSubmit { saveConfig() }
-                    } label: {
-                        Text("命令模板")
-                            .frame(width: 80, alignment: .trailing)
-                    }
-
-                    // 变量参考表格 —— 紧凑的两列布局
-                    GroupBox {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("可用变量")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-
-                            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
-                                ForEach(OpenSessionConfig.supportedVariables, id: \.name) { variable in
-                                    GridRow {
-                                        Text(variable.name)
-                                            .font(.system(size: 11, design: .monospaced))
-                                            .foregroundStyle(.blue)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                                        Text(variable.description)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(8)
-                    }
-                    .backgroundStyle(Color(nsColor: .controlBackgroundColor))
-
-                    // 示例命令 —— 代码块风格
-                    GroupBox {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("示例")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                ForEach(OpenSessionConfig.exampleCommands, id: \.self) { example in
-                                    Text(example)
-                                        .font(.system(size: 11, design: .monospaced))
-                                        .foregroundStyle(.primary)
-                                        .textSelection(.enabled)
-                                        .padding(.leading, 2)
-                                }
-                            }
-                        }
-                        .padding(8)
-                    }
-                    .backgroundStyle(Color(nsColor: .textBackgroundColor))
-
-                    // 测试区域 —— 独立行，视觉上与输入区分离
-                    HStack(spacing: 12) {
-                        Button {
-                            testCommand()
-                        } label: {
-                            HStack(spacing: 4) {
-                                if isTestingCommand {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                        .scaleEffect(0.8)
-                                } else {
-                                    Image(systemName: "play.circle")
-                                        .font(.caption)
-                                }
-                                Text("测试命令")
-                                    .font(.caption)
-                            }
-                        }
-                        .disabled(customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isTestingCommand)
-
-                        if let result = testResult {
-                            HStack(spacing: 4) {
-                                Image(systemName: result.contains("成功") ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                    .font(.caption)
-                                Text(result.replacingOccurrences(of: "✓ ", with: "").replacingOccurrences(of: "❌ ", with: ""))
-                                    .font(.caption)
-                            }
-                            .foregroundStyle(result.contains("成功") ? .green : .red)
-                        }
-                    }
-                    .padding(.top, 4)
-                }
+            } header: {
+                Text("Sync folder")
             } footer: {
-                Text("配置如何打开会话工作目录。更改会立即保存。")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .formStyle(.grouped)
-    }
-
-    /// 保存配置到 ViewModel
-    private func saveConfig() {
-        let config = OpenSessionConfig(
-            method: method,
-            customCommand: customCommand
-        )
-        viewModel.setOpenSessionConfig(config)
-        testResult = nil // 清空测试结果
-    }
-
-    /// 测试自定义命令（使用当前焦点会话）
-    private func testCommand() {
-        guard method == .custom else { return }
-        guard let testSession = viewModel.snapshot.todos.first ?? viewModel.snapshot.running.first else {
-            testResult = "❌ 没有可用的测试会话"
-            return
-        }
-
-        isTestingCommand = true
-        testResult = nil
-
-        Task { @MainActor in
-            do {
-                let executor = OpenSessionExecutor()
-                let config = OpenSessionConfig(method: .custom, customCommand: customCommand)
-                try executor.execute(session: testSession, config: config)
-                testResult = "✓ 命令执行成功"
-            } catch {
-                testResult = "❌ \(error.localizedDescription)"
-            }
-            isTestingCommand = false
-
-            // 3 秒后清空测试结果
-            try? await Task.sleep(for: .seconds(3))
-            testResult = nil
-        }
-    }
-}
-
-/// firstPrompt 过滤规则
-private struct FilterSettingsSection: View {
-    @ObservedObject var viewModel: AppViewModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // 标题和说明
-            VStack(alignment: .leading, spacing: 6) {
-                Text("提示词过滤")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-
-                Text("符合条件的会话将自动跳过，不会出现在待办列表中")
-                    .font(.subheadline)
+                Text("Choose the same folder on each Mac. iCloud Drive, Dropbox, Google Drive, OneDrive "
+                     + "and Syncthing folders all work.")
                     .foregroundStyle(.secondary)
             }
-            .padding(.top, 20)
-            .padding(.horizontal, 20)
-
-            Divider()
-
-            // 添加规则编辑器
-            PromptFilterRuleEditor { pattern, matchType in
-                viewModel.addPromptFilterRule(pattern: pattern, matchType: matchType)
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-
-            // 规则列表
-            ScrollView {
-                VStack(spacing: 8) {
-                    if viewModel.promptFilterRules.isEmpty {
-                        // 空状态提示
-                        VStack(spacing: 12) {
-                            Image(systemName: "line.3.horizontal.decrease.circle")
-                                .font(.system(size: 48))
-                                .foregroundStyle(.tertiary)
-
-                            Text("还没有过滤规则")
-                                .font(.callout)
+            if sync.isEnabled {
+                Section {
+                    LabeledContent {
+                        Text(thisMacStatus)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(sync.deviceName)
+                            Text("This Mac")
+                                .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.secondary)
-
-                            Text("添加规则后，匹配的会话将被自动过滤")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 5)
+                                .overlay(RoundedRectangle(cornerRadius: 4).stroke(.separator))
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 40)
-                    } else {
-                        ForEach(viewModel.promptFilterRules) { rule in
-                            PromptFilterRuleRow(
-                                rule: rule,
-                                onEnabledChange: { isEnabled in
-                                    viewModel.setPromptFilterRuleEnabled(id: rule.id, isEnabled: isEnabled)
-                                },
-                                onUpdate: { pattern, matchType in
-                                    viewModel.updatePromptFilterRule(
-                                        id: rule.id,
-                                        pattern: pattern,
-                                        matchType: matchType
-                                    )
-                                },
-                                onDelete: {
-                                    viewModel.deletePromptFilterRule(id: rule.id)
-                                }
-                            )
+                    }
+                    if sync.peers.isEmpty {
+                        Text("No other Macs yet").foregroundStyle(.secondary)
+                    }
+                    ForEach(sync.peers) { peer in
+                        LabeledContent(peer.name, value: peer.latestChange
+                            .map { "Latest changes \(settingsWhen($0))" } ?? "No changes yet")
+                    }
+                } header: {
+                    Text("Macs")
+                } footer: {
+                    Text(sync.peers.isEmpty
+                         ? "Turn on sync on your other Mac and choose this same folder."
+                         : "Lists created on another Mac arrive closed. Open them from Recent Lists or Search Lists.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Section {
+                ForEach(model.notes) { note in
+                    Toggle(isOn: Binding(
+                        get: { note.isSynced && sync.isEnabled }, set: { model.setSynced(note, $0) }
+                    )) {
+                        HStack(spacing: 8) {
+                            RoundedRectangle(cornerRadius: 3).fill(note.color.fill).frame(width: 10, height: 10)
+                            Text(note.title.isEmpty ? "Untitled List" : note.title).lineLimit(1)
                         }
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-            }
-
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(NSColor.controlBackgroundColor))
-    }
-}
-
-/// 更新网络代理配置
-private struct NetworkSettingsSection: View {
-    @ObservedObject var viewModel: AppViewModel
-    @ObservedObject var updateController: AppUpdateController
-
-    @State private var proxyURLString: String
-
-    init(viewModel: AppViewModel, updateController: AppUpdateController) {
-        self.viewModel = viewModel
-        self.updateController = updateController
-        let config = viewModel.updateProxyConfig
-        _proxyURLString = State(initialValue: config.urlString)
-    }
-
-    private var validationMessage: String? {
-        let config = NetworkProxyConfig(urlString: proxyURLString)
-        guard !config.isEmpty else { return nil }
-        guard config.isUsable else {
-            return "需填写完整 URL,例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890"
-        }
-        return nil
-    }
-
-    var body: some View {
-        Form {
-            Section {
-                // 手动对齐这一行,避免 LabeledContent 默认基线让 rounded TextField 视觉偏低。
-                HStack(alignment: .center, spacing: 12) {
-                    Text("代理地址")
-
-                    Spacer(minLength: 12)
-
-                    TextField("", text: $proxyURLString)
-                        .textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.leading)
-                        .frame(width: 320, height: 24, alignment: .leading)
-                        .onSubmit { saveIfValid() }
-                        .onChange(of: proxyURLString) { _, _ in saveIfValid() }
-                }
-                .frame(minHeight: 28)
-
-                if let validationMessage {
-                    Text(validationMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
+            } header: {
+                Text("Lists")
             } footer: {
-                Text("留空表示不使用代理。仅影响自动更新检查与下载。")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                let synced = model.notes.filter(\.isSynced).count
+                Text(sync.isEnabled
+                     ? "\(synced) of \(model.notes.count) lists sync. New lists don't sync until you turn it on, "
+                        + "here or from the list's ⋯ menu."
+                     : "Turn on sync to choose lists.")
+                    .foregroundStyle(.secondary)
             }
+            .disabled(!sync.isEnabled)
         }
         .formStyle(.grouped)
+        .frame(height: 540)
     }
 
-    private func saveIfValid() {
-        let config = NetworkProxyConfig(urlString: proxyURLString).normalized
-        guard config.isEmpty || config.isUsable else { return }
-
-        viewModel.setUpdateProxyConfig(config)
-        updateController.applyProxyConfig(config)
+    private var thisMacStatus: String {
+        if sync.problem != nil { return "Needs attention" }
+        return sync.lastSynced == nil ? "Starting…" : "Up to date"
     }
 }
 
-/// 关于(版本信息)
-private struct AboutSettingsSection: View {
-    @ObservedObject var updateController: AppUpdateController
+// MARK: - AI Agents (MCP)
+
+/// The MCP switch with live status, then one client's copy-paste (or one-click) setup. Every
+/// snippet spawns the same `Tic --mcp`, so this is one command presented per client.
+private struct AgentsSettings: View {
+    @State private var model = AppModel.shared
+    @State private var selection: String
+    @State private var copied = false
+
+    private let clients: [MCPClient]
+    private let inApplications: Bool
+
+    init() {
+        let exe = Bundle.main.executableURL?.path ?? "Tic"
+        clients = MCPClients.all(executablePath: exe)
+        inApplications = Bundle.main.bundleURL.path.hasPrefix("/Applications")
+        _selection = State(initialValue: "Claude Code")
+    }
+
+    private var client: MCPClient { clients.first { $0.id == selection } ?? clients[0] }
 
     var body: some View {
         Form {
             Section {
-                LabeledContent("版本") {
-                    Text(AppVersion.displayValue(
-                        shortVersionString: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-                    ))
-                        .foregroundStyle(.tertiary)
+                Toggle(isOn: Binding(get: { model.mcpEnabled }, set: { model.setMCPEnabled($0) })) {
+                    Text("Allow AI agents to use Tic")
+                    Text("Lets Claude, Cursor and other MCP clients draft and tick your lists.")
                 }
-
-                Button("检查更新…") {
-                    updateController.checkForUpdates()
+                LabeledContent("Status") {
+                    HStack(spacing: 6) {
+                        Circle().fill(model.mcpEnabled ? Color.green : Color.secondary).frame(width: 8, height: 8)
+                        Text(statusText)
+                    }
                 }
-                .disabled(!updateController.canCheckForUpdates)
+            }
+            Section {
+                Picker("Client", selection: $selection) {
+                    ForEach(clients, id: \.id) { Text($0.name).tag($0.id) }
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(client.detail).foregroundStyle(.secondary)
+                    ScrollView {
+                        Text(client.snippet)
+                            .font(.system(size: 12, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                    }
+                    .frame(height: 130)
+                    .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 7))
+                    HStack(spacing: 8) {
+                        if let link = client.deeplink {
+                            Button("Add to \(client.name)") { open(link) }.buttonStyle(.borderedProminent)
+                        }
+                        Button(copied ? "Copied" : "Copy") { copy() }
+                        if let path = client.configPath {
+                            Button("Open Config File") { openConfig(path) }
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            } header: {
+                Text("Connect a client")
+            } footer: {
+                if !inApplications {
+                    Text("Tic isn't in /Applications. The path in this command changes if you move the app.")
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)
-    }
-}
-
-// MARK: - 过滤规则编辑控件
-
-/// 新增过滤规则的输入行:匹配方式 + pattern + 添加按钮
-private struct PromptFilterRuleEditor: View {
-    let onAdd: (String, PromptFilterMatchType) -> Void
-
-    @State private var pattern = ""
-    @State private var matchType: PromptFilterMatchType = .contains
-
-    // 去除首尾空白后的输入,用于判空与提交
-    private var trimmedPattern: String {
-        pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        .frame(height: 520)
+        .onChange(of: selection) { copied = false }
     }
 
-    var body: some View {
-        HStack(spacing: 12) {
-            // 匹配方式:分段控件,只有「包含 / 等于」两项
-            Picker("匹配方式", selection: $matchType) {
-                ForEach(PromptFilterMatchType.allCases) { type in
-                    Text(type.label).tag(type)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 120)
+    private var statusText: String {
+        guard model.mcpEnabled else { return "Off" }
+        let n = model.mcpConnections
+        return n == 0 ? "Running · no agents connected" : "Running · \(n) connected"
+    }
 
-            // 输入框:根据匹配方式显示不同的提示文案
-            TextField(placeholderText, text: $pattern)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit(add)
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(client.snippet, forType: .string)
+        copied = true
+    }
 
-            // 添加按钮:使用图标
-            Button(action: add) {
-                Image(systemName: "plus.circle.fill")
-                    .font(.system(size: 20))
-                    .symbolRenderingMode(.hierarchical)
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.blue)
-            .disabled(trimmedPattern.isEmpty)
-            .help("添加过滤规则")
+    /// Opens a client install deeplink (Cursor / VS Code).
+    private func open(_ link: String) {
+        if let url = URL(string: link) { NSWorkspace.shared.open(url) }
+    }
+
+    /// Opens the client's config file, or reveals its folder in Finder if the file doesn't exist yet.
+    private func openConfig(_ path: String) {
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.open(url)
+        } else {
+            NSWorkspace.shared.activateFileViewerSelecting([url.deletingLastPathComponent()])
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(NSColor.controlBackgroundColor))
-                .shadow(color: Color.black.opacity(0.05), radius: 2, y: 1)
-        )
-    }
-
-    /// 根据匹配类型返回对应的占位符文案
-    private var placeholderText: String {
-        switch matchType {
-        case .contains:
-            return "输入要过滤的关键词..."
-        case .equals:
-            return "输入要完全匹配的提示词..."
-        }
-    }
-
-    private func add() {
-        guard !trimmedPattern.isEmpty else { return }
-        onAdd(pattern, matchType)
-        pattern = ""
-        matchType = .contains
-    }
-}
-
-/// 单条过滤规则行:启用开关 + 匹配方式 + 可就地编辑的 pattern + 保存/删除
-private struct PromptFilterRuleRow: View {
-    let rule: PromptFilterRule
-    let onEnabledChange: (Bool) -> Void
-    let onUpdate: (String, PromptFilterMatchType) -> Void
-    let onDelete: () -> Void
-
-    @State private var pattern: String
-    @State private var matchType: PromptFilterMatchType
-    @State private var isHovered = false
-
-    init(
-        rule: PromptFilterRule,
-        onEnabledChange: @escaping (Bool) -> Void,
-        onUpdate: @escaping (String, PromptFilterMatchType) -> Void,
-        onDelete: @escaping () -> Void
-    ) {
-        self.rule = rule
-        self.onEnabledChange = onEnabledChange
-        self.onUpdate = onUpdate
-        self.onDelete = onDelete
-        _pattern = State(initialValue: rule.pattern)
-        _matchType = State(initialValue: rule.matchType)
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            // 启用开关:关闭后规则不再命中,pattern 文本转灰提示
-            Toggle("", isOn: Binding(get: { rule.isEnabled }, set: { onEnabledChange($0) }))
-                .labelsHidden()
-                .controlSize(.regular)
-                .toggleStyle(.switch)
-
-            VStack(alignment: .leading, spacing: 4) {
-                // 匹配方式标签 + pattern
-                HStack(spacing: 8) {
-                    // 匹配方式小标签
-                    Text(matchType.label)
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(
-                            Capsule()
-                                .fill(matchTypeBadgeColor)
-                        )
-                        .foregroundStyle(matchTypeForegroundColor)
-
-                    // 可编辑的 pattern
-                    TextField("", text: $pattern)
-                        .textFieldStyle(.plain)
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundStyle(rule.isEnabled ? .primary : .secondary)
-                        .onSubmit(save)
-                }
-
-                // 仅在有改动时显示保存提示
-                if hasChanges {
-                    Text("按回车保存修改")
-                        .font(.caption2)
-                        .foregroundStyle(.blue)
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            // 删除按钮:悬停时显示
-            Button(action: onDelete) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 16))
-                    .symbolRenderingMode(.hierarchical)
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.secondary)
-            .opacity(isHovered ? 1 : 0.3)
-            .help("删除规则")
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(rule.isEnabled ? Color(NSColor.controlBackgroundColor) : Color(NSColor.controlBackgroundColor).opacity(0.5))
-                .shadow(color: Color.black.opacity(0.04), radius: 1, y: 1)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(hasChanges ? Color.blue.opacity(0.5) : Color.clear, lineWidth: 1)
-        )
-        .onHover { hovering in
-            isHovered = hovering
-        }
-    }
-
-    // 匹配方式标签的背景色
-    private var matchTypeBadgeColor: Color {
-        switch matchType {
-        case .contains:
-            return Color.blue.opacity(0.15)
-        case .equals:
-            return Color.purple.opacity(0.15)
-        }
-    }
-
-    // 匹配方式标签的前景色
-    private var matchTypeForegroundColor: Color {
-        switch matchType {
-        case .contains:
-            return .blue
-        case .equals:
-            return .purple
-        }
-    }
-
-    // pattern(去空白后非空且有变化)或匹配方式改变时可保存
-    private var hasChanges: Bool {
-        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmed.isEmpty && (trimmed != rule.pattern || matchType != rule.matchType)
-    }
-
-    private func save() {
-        guard hasChanges else { return }
-        onUpdate(pattern, matchType)
     }
 }

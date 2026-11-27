@@ -1,0 +1,999 @@
+import AppKit
+import SwiftUI
+
+/// Owns the live `NotePanel`s — one per note — and keeps their on-screen frames in sync with
+/// the database. Acts as each panel's window delegate.
+@MainActor
+final class NoteWindowManager: NSObject, NSWindowDelegate {
+    private let appDatabase: AppDatabase
+    private var panels: [UUID: NotePanel] = [:]
+    private(set) var controllers: [UUID: NoteController] = [:]
+    private var pendingFrameSaves: [UUID: Task<Void, Never>] = [:]
+    /// Height a note had before it was rolled up, so it restores to the right size on expand.
+    private var expandedHeights: [UUID: CGFloat] = [:]
+    /// Each open note's frame as saved in the DB — the last spot the user chose. Only user drags and
+    /// resizes update it; a placement we or macOS make (display unplugged, launch rescue) never does,
+    /// so a note parked on the laptop at home still returns to its monitor at the office.
+    private var savedFrames: [UUID: CGRect] = [:]
+    /// True while `place` moves a panel, so its own `windowDidMove` isn't persisted.
+    private var placing = false
+    /// Frame saves are dropped until this instant after a display change: macOS moves windows off a
+    /// vanished display at about the same time as the notification, in either order.
+    private var suppressSavesUntil = Date.distantPast
+    /// The one image window, reused for whichever image was opened last.
+    private var imageWindow: NSWindow?
+    /// The note whose image the image window is showing, so closing that note closes it too.
+    private var imageWindowNoteID: UUID?
+
+    /// Settings › Treat every list as private.
+    var everyListPrivate = false { didSet { applyPrivacyToAll() } }
+    /// Private lists are covered while the screen is shared (menu bar › Cover Private Lists).
+    var coveringPrivate = false { didSet { applyPrivacyToAll() } }
+
+    /// How docked tabs look (Settings › General › Docked tabs).
+    var dockTabStyle: DockTabStyle = .titleCount {
+        didSet {
+            for controller in controllers.values { controller.dockTabStyle = dockTabStyle }
+            layoutTabs()
+        }
+    }
+    /// Settings › Show tabs over full-screen apps: docked tabs join every Space.
+    var tabsOverFullScreen = false {
+        didSet { for id in dockEdges.keys { reapplyBehavior(id) } }
+    }
+
+    // Edge dock state (`MARK: - Edge dock`).
+    /// Docked notes and their edge: the window logic's own record, since the note row can lag its observation.
+    private var dockEdges: [UUID: DockEdge] = [:]
+    /// Where each docked note's tab sits (after stacking).
+    private var tabFrames: [UUID: CGRect] = [:]
+    /// Docked notes open out of their tab (a click opened them; they go back once they lose the keyboard).
+    private var peeks: Set<UUID> = []
+    private var retractTasks: [UUID: Task<Void, Never>] = [:]
+    /// Watching the pointer while a docked note is open, to put it back once the pointer has left it (`watchPointer`).
+    private var peekTasks: [UUID: Task<Void, Never>] = [:]
+    /// Menus of Tic's being tracked (a task's context menu, a tab's): an open note or a slid-out tab waits for them.
+    private var menusOpen = 0
+    /// A drag in progress: whether it started on a tab, and where it would dock if let go now.
+    private var drags: [UUID: Drag] = [:]
+    private struct Drag {
+        var fromTab: Bool
+        var target: (edge: DockEdge, tab: CGRect)?
+    }
+    /// Tabs slid out from their sliver because the pointer is on them.
+    private var hoveredTabs: Set<UUID> = []
+    private var hoverTasks: [UUID: Task<Void, Never>] = [:]
+    /// Where the pointer is (global coordinates). Swapped in tests.
+    var pointerLocation: @MainActor () -> NSPoint = { NSEvent.mouseLocation }
+
+    /// Notes let go of all Spaces while their display showed a full-screen app: hidden until it shows a desktop.
+    private var parked: Set<UUID> = []
+    /// Whether a display is showing an app's full-screen Space. Swapped in tests.
+    var isFullScreenSpace: @MainActor (NSScreen?) -> Bool = { screen in screen.map(SkyLight.isFullScreen) ?? false }
+
+    /// Sync between Macs, handed to each note's views (its header shows sync activity and Sync Now). Nil
+    /// in tests, where notes simply never show sync.
+    var sync: FolderSync?
+    /// 收件箱便签的数据源，由 `AppModel` 注入；测试中为 nil。
+    var inbox: InboxModel?
+
+    init(appDatabase: AppDatabase) {
+        self.appDatabase = appDatabase
+        super.init()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(screensDidChange),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(activeSpaceDidChange),
+            name: NSWorkspace.activeSpaceDidChangeNotification, object: nil
+        )
+        observeMenus()
+    }
+
+    /// Applies pin + all Spaces to a live note. macOS keeps a window on whichever Space is active when it stops
+    /// joining all Spaces, and no collection behaviour or re-ordering moves it off later (probed, Nov 2026). So a
+    /// note let go over a full-screen app is hidden until its display shows a desktop again, and lands there.
+    func applyBehavior(_ panel: NotePanel, floatOnTop: Bool, showOnAllSpaces: Bool) {
+        let id = panel.noteID
+        let wasEverywhere = panel.collectionBehavior.contains(.canJoinAllSpaces)
+        panel.apply(floatOnTop: floatOnTop, showOnAllSpaces: showOnAllSpaces,
+                    tabOnAllSpaces: dockEdges[id] != nil && tabsOverFullScreen)
+        if dockEdges[id] != nil { panel.level = .floating }   // a docked sliver, and the list open out of it, stay on top
+        let isEverywhere = panel.collectionBehavior.contains(.canJoinAllSpaces)
+        if isEverywhere, parked.remove(panel.noteID) != nil {
+            panel.orderFrontRegardless()   // pinned everywhere again (by an agent) while hidden
+        } else if wasEverywhere, !isEverywhere, isFullScreenSpace(Self.screen(of: panel)) {
+            panel.orderOut(nil)
+            parked.insert(panel.noteID)
+        }
+    }
+
+    private func applyPrivacyToAll() {
+        for id in panels.keys { applyPrivacy(id) }
+    }
+
+    /// A private list's window is left out of screen captures that honour `sharingType` (older capture paths;
+    /// ScreenCaptureKit on macOS 15.4+ is reported not to), and drawn as a cover while `coveringPrivate`.
+    private func applyPrivacy(_ id: UUID) {
+        guard let panel = panels[id], let controller = controllers[id] else { return }
+        controller.everyListPrivate = everyListPrivate
+        controller.coveringPrivate = coveringPrivate
+        panel.sharingType = controller.isPrivate ? .none : .readOnly
+        if imageWindowNoteID == id { imageWindow?.sharingType = panel.sharingType }
+    }
+
+    /// The user moved to another Space: show each parked note whose display is on a desktop now.
+    @objc func activeSpaceDidChange() {
+        for id in parked {
+            guard let panel = panels[id] else { parked.remove(id); continue }
+            if isFullScreenSpace(Self.screen(of: panel)) { continue }
+            parked.remove(id)
+            panel.orderFrontRegardless()
+        }
+    }
+
+    /// The display a note is on. A hidden window has no `screen`, so fall back to the one its frame is on.
+    private static func screen(of panel: NSWindow) -> NSScreen? {
+        panel.screen ?? NSScreen.screens.first { $0.frame.intersects(panel.frame) } ?? NSScreen.main
+    }
+
+    // MARK: - Opening notes
+
+    /// Opens a floating panel for every note that was on screen at last quit (called at launch).
+    func restoreAll() async {
+        do {
+            let notes = try await appDatabase.openNotes()
+            for note in notes { openNote(note, makeKey: false) }   // launch: show, don't steal focus
+            NSLog("[Tic] restored \(notes.count) note panel(s)")
+        } catch {
+            NSLog("[Tic] restoreAll failed: \(error)")
+        }
+    }
+
+    /// Shows the panel for a note, creating it if necessary. `makeKey` brings it to key (so an
+    /// interactive open from the menu bar focuses the note and dismisses the .window popover);
+    /// pass `false` for launch restore so we don't yank focus.
+    @discardableResult
+    func openNote(_ note: Note, makeKey: Bool = true) -> NotePanel {
+        if let existing = panels[note.id] {
+            if dockEdges[note.id] != nil { peek(note.id) } else { existing.makeKeyAndOrderFront(nil) }
+            return existing
+        }
+        if !note.isOpen {
+            Task { [appDatabase] in try? await appDatabase.updateNoteOpen(id: note.id, isOpen: true) }
+        }
+        let controller = NoteController(note: note, database: appDatabase)
+        controllers[note.id] = controller
+        controller.start()
+
+        let panel = NotePanel(
+            note: note,
+            content: AnyView(NoteView(controller: controller).environment(sync).environment(inbox))
+        )
+        panels[note.id] = panel
+        savedFrames[note.id] = CGRect(x: note.frameX, y: note.frameY, width: note.frameW, height: note.frameH)
+
+        // Live-window side effects. Weak captures so the closures never keep the panel alive
+        // past close (windowWillClose nils the controller, releasing them).
+        controller.onApplyBehavior = { [weak self, weak panel] floatOnTop, showOnAllSpaces in
+            guard let self, let panel else { return }
+            self.applyBehavior(panel, floatOnTop: floatOnTop, showOnAllSpaces: showOnAllSpaces)
+        }
+        controller.onClose = { [weak panel, appDatabase] in
+            // Only the user's X marks a note closed (quit doesn't), so launch restores what was visible.
+            Task { try? await appDatabase.updateNoteOpen(id: note.id, isOpen: false) }
+            panel?.close()   // triggers windowWillClose → teardown; does NOT delete the note
+        }
+        controller.onSetCollapsed = { [weak self, weak panel] collapsed in
+            guard let self, let panel, self.dockEdges[note.id] == nil else { return }   // docked: applies on undock
+            self.setCollapsed(panel, collapsed: collapsed, animate: true)
+        }
+        controller.dockTabStyle = dockTabStyle
+        controller.onNewNote = { [weak self] in
+            Task { await self?.newNote() }
+        }
+        controller.onPrivacyChange = { [weak self] in self?.applyPrivacy(note.id) }
+        controller.onOpenImage = { [weak self, weak controller, weak panel] taskId in
+            guard let self, let controller, let panel else { return }
+            self.showImageWindow(controller: controller, taskId: taskId, from: panel)
+        }
+        panel.onPasteImage = { [weak controller] data in
+            controller?.stageImage(data)
+        }
+        wireDock(panel, controller)
+
+        applyPrivacy(note.id)
+        if let edge = note.dockEdge {
+            // A docked note opens as its tab. Rolled up, it keeps its expanded height for peeks and undocking.
+            dockEdges[note.id] = edge
+            controller.isDocked = true
+            controller.tabEdge = edge
+            if note.isCollapsed { expandedHeights[note.id] = note.frameH }
+            panel.setFrameless(true)
+            layoutTabs(animate: false)
+            reapplyBehavior(note.id)
+        } else {
+            place(panel)
+        }
+        if makeKey {
+            panel.makeKeyAndOrderFront(nil)   // become key → the menu bar popover resigns/dismisses
+        } else {
+            panel.orderFront(nil)
+        }
+
+        // A note saved in the rolled-up state opens rolled up (keeping its expanded height).
+        if note.isCollapsed && note.dockEdge == nil {
+            setCollapsed(panel, collapsed: true, animate: false)
+        }
+        panel.delegate = self   // only now: the placement and roll-up above aren't user moves to persist
+        controller.isWindowKey = panel.isKeyWindow
+        if makeKey, note.dockEdge != nil { peek(note.id) }   // opened from the menu: out of its tab, not just the tab
+        return panel
+    }
+
+    /// Creates a fresh note (cascaded so it doesn't sit exactly on top of the last) and opens it.
+    /// The DB assigns a unique, monotonic `sortIndex`; the cascade offset derives from that index
+    /// (not the open-panel count), so placement and ordering stay stable after closes/deletes.
+    func newNote() async {
+        do {
+            let inserted = try await appDatabase.insertNewNote(
+                Note(color: NoteColor.allCases.randomElement() ?? .yellow)
+            )
+            let step = Double(inserted.sortIndex % 8) * 28
+            var note = inserted
+            note.frameX = 180 + step
+            note.frameY = 320 - step
+            try? await appDatabase.updateNoteFrame(
+                id: note.id, x: note.frameX, y: note.frameY,
+                width: note.frameW, height: note.frameH
+            )
+            openNote(note)
+            controllers[note.id]?.requestRename()   // a new list starts with its name being typed
+        } catch {
+            NSLog("[Tic] newNote failed: \(error)")
+        }
+    }
+
+    /// Brings every open note to the front (menu-bar "Show All").
+    func showAll() {
+        for panel in panels.values { panel.orderFront(nil) }
+    }
+
+    /// Permanently deletes a note: closes its window if open (existing teardown), then removes
+    /// the row (its tasks go with it via the FK cascade).
+    func deleteNote(_ note: Note) async {
+        do {
+            try await appDatabase.deleteNote(id: note.id)
+            panels[note.id]?.close()   // only tear down once the row is actually gone
+        } catch {
+            NSLog("[Tic] deleteNote failed: \(error)")
+        }
+    }
+
+    /// Rolls a panel up to just its title bar (or back to its expanded height), from the edge
+    /// `rolledFrame` picks. While collapsed the height is locked (`windowWillResize`).
+    private func setCollapsed(_ panel: NotePanel, collapsed: Bool, animate: Bool) {
+        let id = panel.noteID
+        let current = panel.frame
+        let targetHeight: CGFloat
+        if collapsed {
+            if current.height > NoteLayout.collapsedHeight { expandedHeights[id] = current.height }
+            targetHeight = NoteLayout.collapsedHeight
+        } else {
+            targetHeight = expandedHeights[id] ?? max(current.height, 240)
+            expandedHeights[id] = nil
+        }
+        let newFrame = Self.rolledFrame(current, toHeight: targetHeight, screens: Self.visibleFrames)
+        if collapsed { panel.makeFirstResponder(nil) }   // end any edit: the title stays visible in the bar
+        // The system frame (shadow, corners) tracks a resizing window, so it comes back before expanding and
+        // goes only once the bar is down to size.
+        if !collapsed { panel.setFrameless(false) }
+        let finish: @MainActor () -> Void = { [weak self, weak panel] in
+            guard let panel, self?.controllers[id]?.note.isCollapsed == true else { return }   // not re-expanded
+            panel.setFrameless(true)
+        }
+        guard animate else {
+            panel.setFrame(newFrame, display: true)
+            finish()
+            return
+        }
+        // Not `setFrame(_:display:animate:)`: that blocks, so SwiftUI swapped the bar for the note only
+        // once the window was already full height. The animator runs on the run loop, alongside the
+        // view, which drops its list once the window is down to the bar (`NoteView.showsBar`).
+        // ponytail: a re-toggle mid-roll remembers the in-between height; track the target if that bites.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.rollDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().setFrame(newFrame, display: true)
+        } completionHandler: {
+            MainActor.assumeIsolated { finish() }
+        }
+    }
+
+    private static let rollDuration: TimeInterval = 0.22
+
+    private static var visibleFrames: [CGRect] { NSScreen.screens.map(\.visibleFrame) }
+
+    /// Puts a panel where its saved frame says, as long as some connected display shows it; otherwise
+    /// parks it on the main display (nearest edge, same size). Runs at open and on every display
+    /// change, so unplugging a monitor parks its notes and plugging it back returns them to the exact
+    /// spot. Frames are global coordinates spanning all displays (as Stickies stores them), and this
+    /// never persists: the saved frame stays the user's.
+    private func place(_ panel: NotePanel) {
+        guard dockEdges[panel.noteID] == nil else { return }   // tabs are placed by `layoutTabs`
+        guard let saved = savedFrames[panel.noteID], let main = NSScreen.main else { return }
+        let screens = Self.visibleFrames
+        let target = Self.placement(for: saved, screens: screens, main: main.visibleFrame)
+        // Keep the live size: a rolled-up note sits where rolling up from `target` would put it.
+        let height = panel.frame.height
+        let frame = height < target.height ? Self.rolledFrame(target, toHeight: height, screens: screens) : target
+        placing = true
+        panel.setFrameOrigin(frame.origin)
+        placing = false
+    }
+
+    /// A display was plugged in, unplugged, or rearranged. macOS shoves windows off a vanished display
+    /// onto a remaining one, which must not be saved as the user's choice: drop the moves it caused
+    /// (already pending or still to come) and re-place every note from its saved frame.
+    @objc private func screensDidChange() {
+        // ponytail: a 2s blanket, since macOS moves windows within the same reconfiguration; a user drag
+        // inside it is dropped — make it precise if that ever shows.
+        suppressSavesUntil = Date().addingTimeInterval(2)
+        for task in pendingFrameSaves.values { task.cancel() }
+        pendingFrameSaves.removeAll()
+        for panel in panels.values { place(panel) }
+        layoutTabs(animate: false)
+    }
+
+    // MARK: - Image window
+
+    /// Shows a task's image in the image window, creating the window on first use. It takes the note's
+    /// window level, so it opens above a float-on-top note, and activates the app so it comes up in front
+    /// (notes are non-activating panels).
+    private func showImageWindow(controller: NoteController, taskId: UUID, from panel: NotePanel) {
+        let window = imageWindow ?? ImageWindow()
+        imageWindow = window
+        imageWindowNoteID = controller.noteID
+        let text = controller.tasks.first(where: { $0.id == taskId })?.text ?? ""
+        window.title = text.split(separator: "\n").first.map(String.init) ?? "Image"
+        window.contentView = NSHostingView(
+            rootView: ImageViewer(controller: controller, taskId: taskId) { [weak window] in window?.close() }
+        )
+        window.level = panel.level
+        window.sharingType = panel.sharingType   // a private list's picture stays out of shares too
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    var openCount: Int { panels.count }
+
+    // MARK: - Actions for external writers (MCP)
+
+    /// Surfaces a note's panel, opening it from the DB if it wasn't on screen. Used when an agent
+    /// creates a note or writes to a closed one — so the user sees the work. Uses
+    /// `orderFrontRegardless` so a `.normal`-level note appears above other apps even while Tic is in
+    /// the background, but does **not** activate Tic — the user's keyboard focus stays where it was.
+    func openNoteByID(_ id: UUID) async {
+        if let panel = panels[id] { panel.orderFrontRegardless(); return }
+        guard let note = try? await appDatabase.note(id: id) else { return }
+        let panel = openNote(note, makeKey: false)
+        panel.orderFrontRegardless()
+    }
+
+    /// Brings a note fully to the foreground: activates Tic and makes the note key, so it lands in
+    /// front and ready to type in. The explicit "jump to this note" (the `focus_note` MCP tool),
+    /// stronger than `openNoteByID` — this one does take focus.
+    func focusNoteByID(_ id: UUID) async {
+        let panel: NotePanel
+        if let existing = panels[id] {
+            panel = existing
+        } else if let note = try? await appDatabase.note(id: id) {
+            panel = openNote(note, makeKey: false)
+        } else {
+            return
+        }
+        // A background app's plain activate() is refused by macOS focus-stealing prevention, so use
+        // the assertive form (deprecated on 14 but still the only thing that reliably pulls focus
+        // forward from another app). This is opt-in (focus_note / focus:true), never a plain write.
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()
+    }
+
+    /// Hides a note's panel (the agent equivalent of the header X): marks it closed and closes the
+    /// window if it's open. A no-op beyond the DB write when nothing is on screen.
+    func closeNoteByID(_ id: UUID) async {
+        try? await appDatabase.updateNoteOpen(id: id, isOpen: false)
+        panels[id]?.close()   // → windowWillClose tears down the controller/panel
+    }
+
+    /// Moves/resizes a note. If its panel is live, set the frame (the debounced save persists it,
+    /// exactly like a user drag); otherwise persist the frame so `place` uses it when next opened.
+    func setFrame(_ id: UUID, to rect: CGRect) async {
+        if let panel = panels[id] {
+            panel.setFrame(rect, display: true, animate: false)   // fires didMove/didResize → save
+        } else {
+            savedFrames[id] = rect
+            try? await appDatabase.updateNoteFrame(
+                id: id, x: rect.origin.x, y: rect.origin.y, width: rect.width, height: rect.height
+            )
+        }
+    }
+
+    // MARK: - NSWindowDelegate
+
+    func windowDidMove(_ notification: Notification) { scheduleFrameSave(notification) }
+
+    /// The note's size limits, for user resizes only (a roll animation doesn't come through here). A
+    /// rolled-up bar resizes only sideways, so it can't be dragged into a sliver or a blank note; an open
+    /// note keeps room for its header and quick-add.
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        guard let panel = sender as? NotePanel else { return frameSize }
+        let id = panel.noteID
+        if dockEdges[id] != nil && !peeks.contains(id) { return sender.frame.size }   // a tab's size is the manager's
+        let collapsed = controllers[id]?.note.isCollapsed == true && dockEdges[id] == nil
+        let height = collapsed ? NoteLayout.collapsedHeight : max(frameSize.height, NoteLayout.minExpandedHeight)
+        return NSSize(width: max(frameSize.width, NoteLayout.minWidth), height: height)
+    }
+    func windowDidResize(_ notification: Notification) { scheduleFrameSave(notification) }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let panel = notification.object as? NotePanel else { return }
+        if imageWindowNoteID == panel.noteID { imageWindow?.close() }
+        pendingFrameSaves[panel.noteID]?.cancel()
+        pendingFrameSaves[panel.noteID] = nil
+        expandedHeights[panel.noteID] = nil
+        savedFrames[panel.noteID] = nil
+        parked.remove(panel.noteID)
+        let wasDocked = dockEdges.removeValue(forKey: panel.noteID) != nil
+        tabFrames[panel.noteID] = nil
+        peeks.remove(panel.noteID)
+        retractTasks.removeValue(forKey: panel.noteID)?.cancel()
+        peekTasks.removeValue(forKey: panel.noteID)?.cancel()
+        drags[panel.noteID] = nil
+        controllers[panel.noteID]?.stop()
+        controllers[panel.noteID] = nil
+        panels[panel.noteID] = nil
+        hoveredTabs.remove(panel.noteID)
+        hoverTasks.removeValue(forKey: panel.noteID)?.cancel()
+        if wasDocked { layoutTabs() }
+    }
+
+    /// Debounced frame persistence — drag/resize fire continuously, so we save only after the
+    /// gesture settles (300ms idle).
+    private func scheduleFrameSave(_ notification: Notification) {
+        guard let panel = notification.object as? NotePanel else { return }
+        scheduleFrameSave(panel)
+    }
+
+    private func scheduleFrameSave(_ panel: NotePanel) {
+        // Not a user move: our own placement, or macOS relocating windows around a display change.
+        if placing || Date() < suppressSavesUntil { return }
+        let id = panel.noteID
+        // A drag saves once, when it's let go. A docked note's saved frame is where it opens: only the user
+        // resizing it while it's open changes that, never the tab's moves or an animation passing through.
+        if drags[id] != nil || (dockEdges[id] != nil && !(peeks.contains(id) && panel.inLiveResize)) { return }
+        let live = panel.frame
+
+        // While rolled up, the window is at its collapsed height. Still persist position/width, but
+        // save the frame expanding from here would give (EXPANDED height) — otherwise a move/resize
+        // done while collapsed is lost on relaunch, where rolling up from it puts the bar back.
+        let collapsed = controllers[id]?.note.isCollapsed == true && dockEdges[id] == nil
+        let frame = collapsed
+            ? Self.rolledFrame(live, toHeight: expandedHeights[id] ?? live.height, screens: Self.visibleFrames)
+            : live
+        let (x, y, width, height) = (frame.minX, frame.minY, frame.width, frame.height)
+        savedFrames[id] = frame
+
+        pendingFrameSaves[id]?.cancel()
+        pendingFrameSaves[id] = Task { [appDatabase] in
+            try? await Task.sleep(for: .milliseconds(300))
+            if Task.isCancelled { return }
+            try? await appDatabase.updateNoteFrame(id: id, x: x, y: y, width: width, height: height)
+        }
+    }
+}
+
+// MARK: - Edge dock
+
+extension NoteWindowManager {
+    static var displays: [DockLayout.Display] {
+        NSScreen.screens.map { DockLayout.Display(frame: $0.frame, visible: $0.visibleFrame) }
+    }
+
+    /// The note's own size: what it peeks at and unfolds to (its saved frame; expanded if it's rolled up).
+    private func noteSize(_ id: UUID) -> CGSize {
+        let saved = savedFrames[id] ?? .zero
+        return CGSize(width: max(saved.width, NoteLayout.minWidth), height: max(saved.height, NoteLayout.minExpandedHeight))
+    }
+
+    /// A tab's size: a sliver, or long enough for the sideways title (plus icon and count).
+    /// ponytail: measured when tabs are laid out (dock, peek back, launch, style change), so a title an agent
+    /// renames while the note is a tab truncates until then.
+    private func tabSize(_ id: UUID) -> CGSize {
+        guard let controller = controllers[id] else { return CGSize(width: DockLayout.maxTabWidth, height: 64) }
+        let note = controller.note
+        let title = controller.isCovered ? "Private" : (note.title.isEmpty ? "Untitled List" : note.title)
+        let width = (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold)]).width
+        var extra: CGFloat = 26
+        if !controller.isCovered, NoteIcon(stored: note.icon) != nil { extra += 19 }
+        if dockTabStyle == .titleCount { extra += 21 }
+        // Whole points, as AppKit rounds a window's size (asked 87.3, got 88): a fractional height never matched the
+        // tab's window, so every step of a drag along the edge resized and redrew it instead of just moving it.
+        return CGSize(width: DockLayout.maxTabWidth, height: min(max(width + extra, 64), 220).rounded(.up))
+    }
+
+    private func reapplyBehavior(_ id: UUID) {
+        guard let panel = panels[id], let note = controllers[id]?.note else { return }
+        applyBehavior(panel, floatOnTop: note.floatOnTop, showOnAllSpaces: note.showOnAllSpaces)
+    }
+
+    /// Places every docked note's tab: at its saved top on its edge (of its display, or the main one if that
+    /// was unplugged), moved apart where tabs would overlap. Peeking and dragged notes keep their frames.
+    private func layoutTabs(animate: Bool = true) {
+        let displays = Self.displays
+        var groups: [String: (visible: CGRect, tabs: [(id: UUID, frame: CGRect)])] = [:]
+        for (id, edge) in dockEdges {
+            guard let saved = savedFrames[id], let display = DockLayout.display(for: saved, in: displays) else { continue }
+            let key = "\(edge.rawValue) \(display.frame)"
+            let tab = DockLayout.tabFrame(edge, top: saved.maxY, size: tabSize(id), in: display.visible)
+            groups[key, default: (display.visible, [])].tabs.append((id, tab))
+        }
+        for group in groups.values {
+            for (tab, frame) in zip(group.tabs, DockLayout.stacked(group.tabs.map(\.frame), in: group.visible)) {
+                tabFrames[tab.id] = frame
+            }
+        }
+        for (id, tab) in tabFrames where dockEdges[id] != nil && !peeks.contains(id) && drags[id] == nil {
+            guard let panel = panels[id], let edge = dockEdges[id] else { continue }
+            let frame = hoveredTabs.contains(id) ? tab : DockLayout.restFrame(of: tab, at: edge)
+            if panel.frame != frame { setTabFrame(panel, frame, animate: animate) }
+        }
+    }
+
+    /// Shrinks a panel to its tab; the system frame goes once it's down to size (as a roll-up's does).
+    private func setTabFrame(_ panel: NotePanel, _ frame: CGRect, animate: Bool) {
+        let id = panel.noteID
+        let finish: @MainActor () -> Void = { [weak self, weak panel] in
+            guard let self, let panel, self.dockEdges[id] != nil, !self.peeks.contains(id) else { return }
+            panel.setFrameless(true)
+            self.reapplyBehavior(id)
+        }
+        guard animate else {
+            Self.setFrameNow(panel, frame)
+            return finish()
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.rollDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().setFrame(frame, display: true)
+        } completionHandler: {
+            MainActor.assumeIsolated { finish() }
+        }
+    }
+
+    // MARK: Peek
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard let panel = notification.object as? NotePanel else { return }
+        controllers[panel.noteID]?.isWindowKey = true
+        retractTasks.removeValue(forKey: panel.noteID)?.cancel()
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        guard let panel = notification.object as? NotePanel else { return }
+        controllers[panel.noteID]?.isWindowKey = false
+        if peeks.contains(panel.noteID) { scheduleRetract(panel.noteID) }
+    }
+
+    /// The dock's hooks on a new note: its header drag, its tab (hover, click, menu) and its open note's controls.
+    func wireDock(_ panel: NotePanel, _ controller: NoteController) {
+        let id = panel.noteID
+        controller.onTabClick = { [weak self] in self?.peek(id) }
+        controller.onPointerInside = { [weak self] inside in self?.tabHover(id, inside: inside) }
+        controller.onToggleDock = { [weak self] in self?.toggleDock(id) }
+        panel.onDragMove = { [weak self, weak panel] pointer, proposed in
+            guard let self, let panel else { return proposed }
+            return self.dragMoved(panel, pointer: pointer, proposed: proposed)
+        }
+        panel.onDragEnded = { [weak self, weak panel] in
+            if let panel { self?.dragEnded(panel) }
+        }
+        // Esc, or the header's →|: an open docked note goes back (anything else ignores it).
+        panel.onCancel = { [weak self] in self?.retract(id) }
+        controller.onPutBack = { [weak self] in self?.retract(id) }
+    }
+
+    func observeMenus() {
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(menuDidBeginTracking),
+                           name: NSMenu.didBeginTrackingNotification, object: nil)
+        center.addObserver(self, selector: #selector(menuDidEndTracking),
+                           name: NSMenu.didEndTrackingNotification, object: nil)
+    }
+
+    @objc private func menuDidBeginTracking() { menusOpen += 1 }
+    @objc private func menuDidEndTracking() { menusOpen = max(menusOpen - 1, 0) }
+
+    /// How far an opening note slides out of its edge, and a closing one back in. None with Reduce Motion: only a fade.
+    private static var peekSlide: CGFloat { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 18 }
+
+    static func slid(_ frame: CGRect, toward edge: DockEdge) -> CGRect {
+        frame.offsetBy(dx: edge == .left ? -peekSlide : peekSlide, dy: 0)
+    }
+
+    /// Opens a docked note out of its tab (a click on the tab, or opening it from the menu): at full size, sliding out
+    /// of its edge as it fades in. Only the window's position animates, never its size: growing the window from tab to
+    /// note re-laid out the whole list every frame, which lagged. Its quick-add takes the keyboard (`QuickAddBar`).
+    private func peek(_ id: UUID) {
+        guard let edge = dockEdges[id], let panel = panels[id], let tab = tabFrames[id],
+              let display = DockLayout.display(for: tab, in: Self.displays) else { return }
+        retractTasks.removeValue(forKey: id)?.cancel()
+        hoveredTabs.remove(id)
+        hoverTasks.removeValue(forKey: id)?.cancel()
+        panel.level = .floating
+        guard peeks.insert(id).inserted else { return panel.makeKeyAndOrderFront(nil) }
+        let frame = DockLayout.peekFrame(edge, tab: tab, size: noteSize(id), in: display.visible)
+        panel.setFrameless(false)
+        Self.setFrameNow(panel, Self.slid(frame, toward: edge), alpha: 0)
+        panel.contentView?.layoutSubtreeIfNeeded()   // the list lays out now, unseen, rather than during the slide
+        panel.makeKeyAndOrderFront(nil)
+        slide(panel, to: frame, alpha: 1, duration: 0.26)
+        watchPointer(id, opening: frame)
+    }
+
+    /// Back into the tab: slides into its edge as it fades out (a little quicker than it opened), becomes the tab, and
+    /// the tab fades in. If it had the keyboard it hands it back to the app you were in, by leaving the screen for a
+    /// moment: a key panel left at the edge as a tab kept taking your typing.
+    private func retract(_ id: UUID) {
+        retractTasks.removeValue(forKey: id)?.cancel()
+        peekTasks.removeValue(forKey: id)?.cancel()
+        guard peeks.remove(id) != nil, let panel = panels[id], let edge = dockEdges[id] else { return }
+        let hadKeyboard = panel.isKeyWindow
+        panel.makeFirstResponder(nil)   // end any edit, key or not: the field goes with the note
+        let into = Self.slid(panel.frame, toward: edge)
+        slide(panel, to: into, alpha: 0, duration: 0.16, closing: true) { [weak self, weak panel] in
+            guard let self, let panel, !self.peeks.contains(id), self.dockEdges[id] != nil else { return }
+            let handBack = hadKeyboard && panel.isKeyWindow
+            if handBack { panel.orderOut(nil) }
+            self.layoutTabs(animate: false)
+            if handBack { panel.orderFrontRegardless() }
+            self.fade(panel, to: 1)
+        }
+    }
+
+    /// Lost the keyboard: back into the tab, unless it's taken back. It waits while something of it is in use: its
+    /// ⋯ menu above all, where All emoji… opens the Character Viewer, which takes the keyboard for its search field.
+    private func scheduleRetract(_ id: UUID) {
+        retractTasks[id]?.cancel()
+        retractTasks[id] = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            while !Task.isCancelled {
+                guard let self, let panel = self.panels[id], !panel.isKeyWindow else { return }
+                if !self.isInUse(id, panel) { return self.retract(id) }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+    }
+
+    /// An open docked note goes back by itself once the pointer has been off it for a second, for a quick edit: open,
+    /// type, Return, move on. Only after the pointer has been on it (opened from the menu bar, it waits for you to come
+    /// over), and never with something typed in it that isn't in yet (Return or Esc lets it go) or while it's in use.
+    private func watchPointer(_ id: UUID, opening frame: CGRect) {
+        peekTasks[id]?.cancel()
+        // Clicked open, the pointer is on it already: counted now, not at the first check, which can come late.
+        let onItAlready = frame.insetBy(dx: -2, dy: -2).contains(pointerLocation())
+        peekTasks[id] = Task { [weak self] in
+            var visited = onItAlready
+            // Timed by the clock, not by counting checks: on a busy main thread checks come late, and a second
+            // stretched to many (seen under the test suite's load).
+            var awaySince: ContinuousClock.Instant?
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard let self, self.peeks.contains(id), let panel = self.panels[id] else { return }
+                if panel.frame.insetBy(dx: -2, dy: -2).contains(self.pointerLocation()) {
+                    visited = true
+                    awaySince = nil
+                    continue
+                }
+                guard visited else { continue }
+                let typing = (panel.firstResponder as? NSTextView).map {
+                    !$0.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                } ?? false
+                if typing || self.isInUse(id, panel) {
+                    awaySince = nil
+                    continue
+                }
+                let since = awaySince ?? .now
+                awaySince = since
+                if ContinuousClock.now - since >= .seconds(1) { return self.retract(id) }
+            }
+        }
+    }
+
+    /// Something of an open docked note is still in use, so it stays out: a drag or resize of it, its ⋯ popover or a
+    /// sheet, its picture in the image window, or a menu.
+    private func isInUse(_ id: UUID, _ panel: NotePanel) -> Bool {
+        drags[id] != nil || panel.inLiveResize || panel.attachedSheet != nil || menusOpen > 0
+            || panel.childWindows?.contains(where: \.isVisible) == true
+            || (imageWindowNoteID == id && imageWindow?.isVisible == true)
+    }
+
+    /// Moves a note at its full size (only the origin changes, so nothing re-lays out) and fades it, together.
+    private func slide(_ panel: NSWindow, to frame: CGRect, alpha: CGFloat, duration: TimeInterval,
+                       closing: Bool = false, then: (@MainActor () -> Void)? = nil) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = closing
+                ? CAMediaTimingFunction(name: .easeIn)
+                : CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
+            panel.animator().setFrame(frame, display: true)
+            panel.animator().alphaValue = alpha
+        } completionHandler: {
+            MainActor.assumeIsolated { then?() }
+        }
+    }
+
+    /// Sets a frame (and an alpha) at once, replacing any animation of them still running (a tab's slide, a fade): a
+    /// plain `setFrame` doesn't stop one (probed), so a click mid-slide opened the note and the slide pulled it back
+    /// to tab size.
+    static func setFrameNow(_ panel: NSWindow, _ frame: CGRect, alpha: CGFloat? = nil) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            panel.animator().setFrame(frame, display: true)
+            if let alpha { panel.animator().alphaValue = alpha }
+        }
+    }
+
+    private func fade(_ panel: NSWindow, to alpha: CGFloat, then: (@MainActor () -> Void)? = nil) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            panel.animator().alphaValue = alpha
+        } completionHandler: {
+            MainActor.assumeIsolated { then?() }
+        }
+    }
+
+    // MARK: Drag, dock and undock
+
+    /// One step of a header or tab drag: at a display's left or right edge the note folds into its tab there, held at
+    /// the pointer; anywhere else it's the note (a tab unfolds with its header under the pointer).
+    private func dragMoved(_ panel: NotePanel, pointer: NSPoint, proposed: NSRect) -> NSRect {
+        let id = panel.noteID
+        if drags[id] == nil {
+            drags[id] = Drag(fromTab: panel.frame.width <= DockLayout.maxTabWidth + 0.5)
+            retractTasks.removeValue(forKey: id)?.cancel()
+            peeks.remove(id)
+            peekTasks.removeValue(forKey: id)?.cancel()
+            hoveredTabs.remove(id)
+            hoverTasks.removeValue(forKey: id)?.cancel()
+            Self.setFrameNow(panel, panel.frame, alpha: 1)   // a closing fade may still be running
+        }
+        if let hit = DockLayout.edge(at: pointer, in: Self.displays) {
+            let tab = DockLayout.tabFrame(hit.edge, top: pointer.y + 16, size: tabSize(id), in: hit.display.visible)
+            drags[id]?.target = (hit.edge, tab)
+            controllers[id]?.tabEdge = hit.edge
+            panel.setFrameless(true)
+            return tab
+        }
+        drags[id]?.target = nil
+        let collapsed = controllers[id]?.note.isCollapsed == true
+        var size = noteSize(id)
+        if collapsed { size.height = NoteLayout.collapsedHeight }
+        panel.setFrameless(collapsed)
+        if drags[id]?.fromTab != true && proposed.size == size { return proposed }
+        return NSRect(x: pointer.x - 40, y: pointer.y + 16 - size.height, width: size.width, height: size.height)
+    }
+
+    private func dragEnded(_ panel: NotePanel) {
+        let id = panel.noteID
+        guard let drag = drags.removeValue(forKey: id) else { return snapToBottom(panel) }
+        if let target = drag.target {
+            dock(id, edge: target.edge, tab: target.tab)
+        } else if dockEdges[id] != nil {
+            undock(id)
+        } else {
+            scheduleFrameSave(panel)
+            snapToBottom(panel)
+        }
+    }
+
+    /// Docks a note with its tab at `tab`. The saved frame becomes where it peeks.
+    private func dock(_ id: UUID, edge: DockEdge, tab: CGRect) {
+        guard let panel = panels[id], let controller = controllers[id],
+              let display = DockLayout.display(for: tab, in: Self.displays) else { return }
+        if controller.note.isCollapsed, expandedHeights[id] == nil, let saved = savedFrames[id] {
+            expandedHeights[id] = saved.height
+        }
+        let peek = DockLayout.peekFrame(edge, tab: tab, size: noteSize(id), in: display.visible)
+        dockEdges[id] = edge
+        controller.isDocked = true
+        controller.tabEdge = edge
+        controller.setDockEdge(edge)
+        savedFrames[id] = peek
+        Task { [appDatabase] in
+            try? await appDatabase.updateNoteFrame(id: id, x: peek.minX, y: peek.minY, width: peek.width, height: peek.height)
+        }
+        panel.setFrameless(true)
+        layoutTabs()
+        reapplyBehavior(id)
+    }
+
+    /// Undocks a note where its window is now (a drag let it go there, or ⋯ › Undock put it there).
+    private func undock(_ id: UUID) {
+        guard let panel = panels[id], let controller = controllers[id] else { return }
+        dockEdges[id] = nil
+        tabFrames[id] = nil
+        peeks.remove(id)
+        retractTasks.removeValue(forKey: id)?.cancel()
+        peekTasks.removeValue(forKey: id)?.cancel()
+        controller.isDocked = false
+        controller.setDockEdge(nil)
+        let collapsed = controller.note.isCollapsed
+        panel.setFrameless(collapsed)
+        reapplyBehavior(id)   // back to its pin; over a full-screen app it may leave for its desktop
+        scheduleFrameSave(panel)
+        if collapsed { snapToBottom(panel) }
+        layoutTabs()
+    }
+
+    /// ⋯ › Dock to Edge (the nearer edge, at the note's height), or Undock (⋯, the header's dock button, the
+    /// tab's menu): the note slides 40pt in from the edge where it opens, so you see it leave the dock.
+    private func toggleDock(_ id: UUID) {
+        guard let panel = panels[id], let controller = controllers[id] else { return }
+        let displays = Self.displays
+        if let edge = dockEdges[id] {
+            guard let tab = tabFrames[id], let display = DockLayout.display(for: tab, in: displays) else { return }
+            let open = DockLayout.peekFrame(edge, tab: tab, size: noteSize(id), in: display.visible)
+            let out = open.offsetBy(dx: edge == .left ? 40 : -40, dy: 0)
+            let wasOpen = peeks.remove(id) != nil
+            if controller.note.isCollapsed {
+                panel.setFrameless(true)
+                let bar = Self.rolledFrame(out, toHeight: NoteLayout.collapsedHeight, screens: [display.visible])
+                Self.setFrameNow(panel, bar, alpha: 1)
+                return undock(id)
+            }
+            panel.setFrameless(false)
+            if !wasOpen {   // from the tab's menu: unfold where it would open, unseen, then slide out like an opening
+                Self.setFrameNow(panel, open, alpha: 0)
+                panel.contentView?.layoutSubtreeIfNeeded()
+            }
+            undock(id)
+            slide(panel, to: out, alpha: 1, duration: 0.22)
+        } else {
+            guard let display = DockLayout.display(for: panel.frame, in: displays) else { return }
+            let edge = DockLayout.nearestEdge(of: panel.frame, on: display)
+            controller.tabEdge = edge
+            dock(id, edge: edge, tab: DockLayout.tabFrame(edge, top: panel.frame.maxY, size: tabSize(id), in: display.visible))
+        }
+    }
+
+    // MARK: Hover
+
+    /// The pointer came onto a resting sliver: it slides out into the full tab. It goes back once the pointer has
+    /// really been off the tab for ~0.1 s, checked by where the pointer is: the tracking area's own "left" isn't
+    /// trusted here, since following it made a hovered tab flash in and out while its window resized.
+    func tabHover(_ id: UUID, inside: Bool) {
+        guard inside, dockEdges[id] != nil, !peeks.contains(id), drags[id] == nil,
+              hoveredTabs.insert(id).inserted else { return }
+        slideTab(id)
+        hoverTasks[id]?.cancel()
+        hoverTasks[id] = Task { [weak self] in
+            var outside = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(40))
+                guard let self, self.hoveredTabs.contains(id), let tab = self.tabFrames[id] else { return }
+                let held = self.menusOpen > 0   // its right-click menu is open
+                outside = held || tab.insetBy(dx: -2, dy: -2).contains(self.pointerLocation()) ? 0 : outside + 1
+                if outside >= 3 {
+                    self.hoveredTabs.remove(id)
+                    self.slideTab(id)
+                    return
+                }
+            }
+        }
+    }
+
+    /// Out to the full tab with a little spring, or back to the sliver (no overshoot: a sliver shrunk past its
+    /// width would slip out from under the pointer). A tab is tiny, so animating its frame is cheap.
+    private func slideTab(_ id: UUID) {
+        guard let panel = panels[id], let tab = tabFrames[id], let edge = dockEdges[id] else { return }
+        let out = hoveredTabs.contains(id)
+        panel.hasShadow = out
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = out ? 0.22 : 0.16
+            context.timingFunction = out
+                ? CAMediaTimingFunction(controlPoints: 0.34, 1.3, 0.64, 1)
+                : CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(out ? tab : DockLayout.restFrame(of: tab, at: edge), display: true)
+        }
+    }
+}
+
+// MARK: - Bottom snap
+
+extension NoteWindowManager {
+    /// A bar let go within `bottomSnap` of its display's bottom (or past it) glides down flush, where
+    /// expanding grows upward (issue 18). "Rolling" it to its own height is exactly that move.
+    private func snapToBottom(_ panel: NotePanel) {
+        guard controllers[panel.noteID]?.note.isCollapsed == true else { return }
+        let snapped = Self.rolledFrame(panel.frame, toHeight: panel.frame.height, screens: Self.visibleFrames)
+        guard snapped != panel.frame else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.rollDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(snapped, display: true)
+        }
+    }
+}
+
+// MARK: - Frame geometry (pure, tested)
+
+extension NoteWindowManager {
+    /// How far above the bottom of the display (the Dock's top) a note still counts as parked there.
+    nonisolated static let bottomSnap: CGFloat = 48
+
+    /// `frame` rolled up to `height` or back down. The top edge stays put, unless the note's bottom is
+    /// within `bottomSnap` of its display's bottom: then it rolls from there, flush — a bar parked above
+    /// the Dock stays there and expands upward. Expanding never runs off the bottom or above the top.
+    nonisolated static func rolledFrame(_ frame: CGRect, toHeight height: CGFloat, screens: [CGRect]) -> CGRect {
+        var result = frame
+        result.origin.y = frame.maxY - height
+        result.size.height = height
+        let area = { (s: CGRect) in s.intersection(frame).width * s.intersection(frame).height }
+        guard let screen = screens.max(by: { area($0) < area($1) }), area(screen) > 0 else { return result }
+        if frame.minY <= screen.minY + bottomSnap { result.origin.y = screen.minY }
+        result.origin.y = min(max(result.origin.y, screen.minY), screen.maxY - height)
+        return result
+    }
+
+    /// `saved` itself when at least an 80×80 corner lies on one of `screens`; else `saved` shifted the
+    /// shortest distance that fits it on `main` (a note taller than the screen keeps its top edge on).
+    nonisolated static func placement(for saved: CGRect, screens: [CGRect], main: CGRect) -> CGRect {
+        if isVisible(saved, onAnyOf: screens) { return saved }
+        var frame = saved
+        frame.origin.x = min(max(saved.minX, main.minX), main.maxX - saved.width)
+        frame.origin.y = min(max(saved.minY, main.minY), main.maxY - saved.height)
+        return frame
+    }
+
+    /// True when at least an 80×80 corner of `frame` lies on one of `screens` (enough to grab).
+    nonisolated static func isVisible(_ frame: CGRect, onAnyOf screens: [CGRect]) -> Bool {
+        screens.contains { screen in
+            let overlap = screen.intersection(frame)
+            return overlap.width >= 80 && overlap.height >= 80
+        }
+    }
+}
+
+// MARK: - Full-screen Spaces (private API)
+
+/// Whether a display is showing an app's full-screen Space. AppKit has no API for it, so this asks the private
+/// CoreGraphics calls window managers use (space type 4 is full screen), looked up at run time.
+/// ponytail: private API. If a macOS drops a symbol this answers false, and a note unpinned over a full-screen
+/// app stays there until full screen ends, as it did before.
+@MainActor
+enum SkyLight {
+    private typealias MainConnection = @convention(c) () -> Int32
+    private typealias CurrentSpace = @convention(c) (Int32, CFString) -> UInt64
+    private typealias SpaceType = @convention(c) (Int32, UInt64) -> Int32
+    private static let fullScreenType: Int32 = 4
+    private static let handle = dlopen(nil, RTLD_NOW)
+    private static let mainConnection = symbol("CGSMainConnectionID", as: MainConnection.self)
+    private static let currentSpace = symbol("CGSManagedDisplayGetCurrentSpace", as: CurrentSpace.self)
+    private static let spaceType = symbol("CGSSpaceGetType", as: SpaceType.self)
+
+    private static func symbol<T>(_ name: String, as type: T.Type) -> T? {
+        dlsym(handle, name).map { unsafeBitCast($0, to: type) }
+    }
+
+    static func isFullScreen(_ screen: NSScreen) -> Bool {
+        guard let mainConnection, let currentSpace, let spaceType,
+              let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+              let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue(),
+              let display = CFUUIDCreateString(nil, uuid) else { return false }
+        let connection = mainConnection()
+        return spaceType(connection, currentSpace(connection, display)) == fullScreenType
+    }
+}

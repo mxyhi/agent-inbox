@@ -10,7 +10,7 @@ final class UserNotificationController: NSObject {
     nonisolated static let sessionIDUserInfoKey = "agent-inbox.session-id"
 
     private let center: UNUserNotificationCenter?
-    /// 通知点击后由 AppViewModel 处理，参数为通知携带的会话复合 ID。
+    /// 通知点击后由 InboxModel 处理，参数为通知携带的会话复合 ID。
     var onNotificationSelected: ((String?) -> Void)?
 
     init(center: UNUserNotificationCenter? = nil) {

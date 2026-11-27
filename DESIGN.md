@@ -1,4 +1,36 @@
-# Agent Inbox V4 设计:动效驱动的会话列表
+# Agent Inbox 设计
+
+## V5：tic 便签外壳（2026-11-27）
+
+App 层改用 [tic](https://github.com/mxyhi/tic)（MIT，基于 84bb4fe，许可见 `ThirdParty/tic/LICENSE`）的便签窗口层。`AgentInboxCore` 不变；V4 的状态点、会话行与待办语义保留，V4 的浮窗（`FloatingPanelController`、胶囊空态、内容驱动尺寸、右上锚点）废弃。
+
+### 决策
+
+- **收件箱就是一张 tic 清单**：`note.kind = agentInbox`，tic 的 UI 与功能原样保留（加任务、子任务、拖拽、贴图、卷起、贴边停靠、图钉、材质、隐私）。唯一的区别是任务列表最上面插入 `InboxSessionRows`：待办行和运行中行，样式照搬 `TaskRowView`。点圆圈标记已处理，点文字打开会话，右键可按提示词过滤。卷起条和停靠 tab 的数字 = Agent 待办 + 未完成任务。
+- **待办不写入 task 表**：快照仍是「日志 → CompositeSessionMonitor → AgentStatusResolver」推导，确认仍写 `state.sqlite`。便签行只存窗口状态，避免日志状态与任务行双向同步。
+- **置顶用 tic 的图钉**：旧的「置顶模式」不再使用（Core 里的 `pinMode` 仍会读写，App 不读）。首次创建的收件箱默认置顶。
+- **隔离**：收件箱不进 `allNotes`/`observeNotes`（菜单栏、清单面板、MCP）、不进同步记录，MCP 按 id 访问也拒绝。新清单命名只数清单。
+- **保留 tic 功能**：清单、文件夹同步、MCP、搜索面板、Dock 图标。tic 自带的 GitHub Releases 更新器删除，统一用 Sparkle 与原 bundle ID，已安装版本原地升级。
+
+### 迁移边界
+
+- 便签库是新文件 `~/Library/Application Support/Agent Inbox/notes.sqlite`；`state.sqlite` 原样沿用。首次启动用旧 `panelAnchor` 摆放收件箱便签，之后不再读写该锚点。
+- 不再种入 tic 的欢迎清单；同步文件夹默认 `iCloud Drive/Agent Inbox`，与独立安装的 Tic.app 互不干扰。
+- 从 accessory 变为 Dock + 菜单栏双入口（tic 的交互依赖前台激活）；打包不再写 `LSUIElement`。
+- 界面语言：收件箱与菜单栏中文，tic 的清单、设置通用页仍为英文（未做本地化）。
+
+### 结构
+
+```
+AgentInboxApp
+├── AgentInboxApp.swift / AppDelegate.swift / AppModel.swift   # 菜单栏、启动顺序、收件箱置顶
+├── Inbox/                      # InboxModel（原 AppViewModel）、FSEvents、通知、Sparkle、InboxSessionRows、设置标签页
+├── Windows/ Views/ Controllers/ Models/ Database/ Sync/ MCP/   # tic 便签层（NoteView 按 kind 分支）
+```
+
+---
+
+## V4：动效驱动的会话列表（窗口部分已被 V5 取代）
 
 **版本**: 4.0 · **日期**: 2026-07-04
 

@@ -1,0 +1,612 @@
+import CoreGraphics
+import Foundation
+import Observation
+
+/// Drives a single note window: holds the note's current state, streams its tasks live from the
+/// database, and turns user actions into (targeted) database writes. One controller per open
+/// note, owned by `NoteWindowManager` for the window's lifetime.
+@MainActor
+@Observable
+final class NoteController {
+    let noteID: UUID
+    private(set) var note: Note
+    private(set) var tasks: [TaskItem] = []
+    /// The crop of each task's image, keyed by task id — a key's presence means the task has an image.
+    private(set) var imageCrops: [UUID: CGRect] = [:]
+    /// Each image's content hash, to spot a replaced image whose crop didn't change.
+    @ObservationIgnored private var imageHashes: [UUID: String] = [:]
+    /// Downsampled, uncropped bitmaps for drawing images on the note, loaded lazily per task.
+    private(set) var thumbnails: [UUID: CGImage] = [:]
+
+    @ObservationIgnored private let db: AppDatabase
+    @ObservationIgnored private var observation: Task<Void, Never>?
+    @ObservationIgnored private var noteObservation: Task<Void, Never>?
+    @ObservationIgnored private var imageObservation: Task<Void, Never>?
+    @ObservationIgnored private var loadingThumbnails: Set<UUID> = []
+
+    /// Re-applies window behaviour (floatOnTop, showOnAllSpaces) to the live panel. Set by
+    /// `NoteWindowManager` so the controller stays AppKit-free.
+    @ObservationIgnored var onApplyBehavior: ((Bool, Bool) -> Void)?
+
+    /// Asks the manager to close (hide) this note's panel. Does NOT delete the note.
+    @ObservationIgnored var onClose: (() -> Void)?
+
+    /// Asks the manager to roll the live panel up/down to match `isCollapsed`.
+    @ObservationIgnored var onSetCollapsed: ((Bool) -> Void)?
+
+    /// Asks the manager to create a brand-new note (the in-note "+" button).
+    @ObservationIgnored var onNewNote: (() -> Void)?
+
+    /// Asks the manager to show a task's image (by task id) in the image window.
+    @ObservationIgnored var onOpenImage: ((UUID) -> Void)?
+
+    /// Asks the manager to re-apply the window's privacy (this list's Private switch changed).
+    @ObservationIgnored var onPrivacyChange: (() -> Void)?
+
+    /// Set by `NoteWindowManager`: Settings › Treat every list as private.
+    var everyListPrivate = false
+    /// Set by `NoteWindowManager`: private lists are covered while the screen is shared.
+    var coveringPrivate = false
+    /// This list stays out of screen shares (its own switch, or Settings for every list).
+    var isPrivate: Bool { everyListPrivate || note.isPrivate }
+    /// Drawn as a plain cover right now: no title, no icon, no tasks.
+    var isCovered: Bool { coveringPrivate && isPrivate }
+
+    /// The panel has keyboard focus, so its text stays readable with the pointer elsewhere.
+    var isWindowKey = false
+
+    // Edge dock, driven by `NoteWindowManager` (which keeps its own record: the note row can lag).
+    /// Docked to a display edge (shown as a tab, or peeking out of one).
+    var isDocked = false
+    /// The edge the tab sits against: while docked, and while a drag holds the note folded at an edge.
+    var tabEdge: DockEdge = .right
+    /// How tabs look (Settings › General › Docked tabs).
+    var dockTabStyle: DockTabStyle = .titleCount
+    /// The pointer entered or left the note's window (a resting sliver slides out into its tab).
+    @ObservationIgnored var onPointerInside: ((Bool) -> Void)?
+    /// A click on the tab: open the note.
+    @ObservationIgnored var onTabClick: (() -> Void)?
+    /// ⋯ › Dock to Edge / Undock, the open note's dock button, the tab's Undock.
+    @ObservationIgnored var onToggleDock: (() -> Void)?
+    /// The open note's →|: back into its tab.
+    @ObservationIgnored var onPutBack: (() -> Void)?
+
+    init(note: Note, database: AppDatabase) {
+        self.noteID = note.id
+        self.note = note
+        self.db = database
+    }
+
+    /// Begins streaming this note's tasks; each emission replaces `tasks` and updates the UI.
+    func start() {
+        observation?.cancel()
+        observation = Task { [weak self, db, noteID] in
+            do {
+                for try await items in db.observeTasks(noteId: noteID) {
+                    self?.tasks = items
+                }
+            } catch {
+                NSLog("[Tic] task observation ended for \(noteID): \(error)")
+            }
+        }
+        // The note's own row: an agent (or any other writer) changing the title, colour, flags, or
+        // list options shows up here live. Own writes echo back as no-ops (the diff sees no change).
+        noteObservation?.cancel()
+        noteObservation = Task { [weak self, db, noteID] in
+            do {
+                for try await updated in db.observeNote(id: noteID) {
+                    if let updated { self?.applyObservedNote(updated) }
+                }
+            } catch {
+                NSLog("[Tic] note observation ended for \(noteID): \(error)")
+            }
+        }
+        imageObservation?.cancel()
+        imageObservation = Task { [weak self, db, noteID] in
+            do {
+                for try await images in db.observeTaskImageCrops(noteId: noteID) {
+                    self?.applyObservedImages(images)
+                }
+            } catch {
+                NSLog("[Tic] image observation ended for \(noteID): \(error)")
+            }
+        }
+    }
+
+    func stop() {
+        observation?.cancel()
+        observation = nil
+        noteObservation?.cancel()
+        noteObservation = nil
+        imageObservation?.cancel()
+        imageObservation = nil
+    }
+
+    /// Applies an observed note-row change: replaces `note`, and drives the live window only for the
+    /// fields that actually changed. The controller's own actions mutate `note` first, so their echo
+    /// is a no-op here (nothing double-applies).
+    private func applyObservedNote(_ updated: Note) {
+        let old = note
+        guard old != updated else { return }
+        note = updated
+        if old.floatOnTop != updated.floatOnTop || old.showOnAllSpaces != updated.showOnAllSpaces {
+            onApplyBehavior?(updated.floatOnTop, updated.showOnAllSpaces)
+        }
+        if old.isCollapsed != updated.isCollapsed {
+            onSetCollapsed?(updated.isCollapsed)
+        }
+        if old.isPrivate != updated.isPrivate {
+            onPrivacyChange?()
+        }
+    }
+
+    // MARK: - Task actions
+
+    /// Adds a task at the end. `level` is the requested nesting depth (from the quick-add field's
+    /// pending indent); it's clamped to what the previous row allows so the outline stays valid.
+    /// With `imageData` (a paste) the task carries that image, and its text may be empty.
+    func addTask(_ rawText: String, level: Int = 0, imageData: Data? = nil) {
+        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty || imageData != nil else { return }
+        let maxLevel = tasks.last.map { min(TaskItem.maxIndentLevel, $0.indentLevel + 1) } ?? 0
+        let clamped = min(max(level, 0), maxLevel)
+        let task = TaskItem(noteId: noteID, text: text, sortIndex: tasks.count, indentLevel: clamped)
+        tasks += [task]   // optimistic so the row appears instantly
+        if let imageData {
+            imageCrops[task.id] = TaskImage.fullCrop
+            loadThumbnail(task.id, data: imageData)
+        }
+        // insertTask assigns the real sortIndex (MAX+1)
+        Task { [db] in try? await db.insertTask(task, imageData: imageData) }
+    }
+
+    // MARK: - Quick-add image
+
+    /// An image pasted into the quick-add, waiting there (with whatever gets typed) until Return adds the
+    /// task. A draft only — never persisted.
+    private(set) var pendingImage: Data?
+    private(set) var pendingThumbnail: CGImage?
+    /// Bumped to ask the quick-add field to take the keyboard (e.g. a paste with nothing focused).
+    private(set) var quickAddFocusRequest = 0
+    /// Bumped to ask the header to start renaming the note (a brand-new list starts out that way).
+    private(set) var renameRequest = 0
+
+    func requestRename() { renameRequest += 1 }
+
+    /// Holds a pasted image in the quick-add, replacing any already waiting, and focuses the field.
+    func stageImage(_ data: Data) {
+        pendingImage = data
+        pendingThumbnail = nil
+        quickAddFocusRequest += 1
+        Task { [weak self] in
+            let thumbnail = await Task.detached { TaskImage.thumbnail(data, maxPixelSize: 256) }.value
+            if self?.pendingImage == data { self?.pendingThumbnail = thumbnail }
+        }
+    }
+
+    func discardPendingImage() {
+        pendingImage = nil
+        pendingThumbnail = nil
+    }
+
+    /// Adds the quick-add draft — `text` plus any waiting image — as a task, and clears the waiting image.
+    func addTaskFromQuickAdd(_ text: String, level: Int) {
+        addTask(text, level: level, imageData: pendingImage)
+        discardPendingImage()
+    }
+
+    /// Pastes `data` onto `task` as its image, replacing any it had (a new picture starts uncropped).
+    func attachImage(_ data: Data, to task: TaskItem) {
+        let id = task.id
+        imageCrops[id] = TaskImage.fullCrop   // optimistic; the observation confirms
+        loadThumbnail(id, data: data)
+        Task { [db] in try? await db.setTaskImage(taskId: id, data: data) }
+    }
+
+    /// Saves a new crop for the task's image. Non-destructive: the original stays stored, so it can be reset.
+    func setCrop(_ crop: CGRect, for task: TaskItem) {
+        let id = task.id
+        guard let current = imageCrops[id], current != crop else { return }
+        imageCrops[id] = crop   // optimistic; the observation confirms
+        Task { [db] in try? await db.updateTaskImageCrop(taskId: id, crop: crop) }
+    }
+
+    /// Removes a task's image. An image-only task has nothing left, so the task goes too.
+    func removeImage(from task: TaskItem) {
+        let id = task.id
+        guard imageCrops[id] != nil else { return }
+        imageCrops[id] = nil
+        thumbnails[id] = nil
+        if (tasks.first(where: { $0.id == id })?.text ?? "").isEmpty {
+            delete(task)   // the image cascades with it
+        } else {
+            Task { [db] in try? await db.deleteTaskImage(taskId: id) }
+        }
+    }
+
+    /// Opens the task's image in the image window.
+    func openImage(_ task: TaskItem) {
+        onOpenImage?(task.id)
+    }
+
+    /// The task's stored image at full resolution, uncropped — decoded off the main actor.
+    func fullImage(taskId id: UUID) async -> CGImage? {
+        guard let data = try? await db.taskImageData(taskId: id) else { return nil }
+        return await Task.detached { TaskImage.fullImage(data) }.value
+    }
+
+    /// A temp PNG of the task's image as currently cropped, for handing to the Preview app — rendered off
+    /// the main actor.
+    func previewFile(taskId id: UUID) async -> URL? {
+        let crop = imageCrops[id] ?? TaskImage.fullCrop
+        guard let data = try? await db.taskImageData(taskId: id) else { return nil }
+        return await Task.detached { TaskImage.writePreviewFile(data, crop: crop) }.value
+    }
+
+    /// Inserts an empty subtask one level under `parent`, positioned right after `parent`'s existing
+    /// subtree, and returns its id so the view can drop straight into editing it. (An empty task that
+    /// never gets text is removed on commit, just like clearing a row.) No-op past the depth cap.
+    @discardableResult
+    func addSubtask(under parent: TaskItem) -> UUID? {
+        guard let parentIndex = tasks.firstIndex(where: { $0.id == parent.id }) else { return nil }
+        guard parent.indentLevel < TaskItem.maxIndentLevel else { return nil }
+        let insertAt = TaskOutline.subtreeRange(tasks, at: parentIndex).upperBound
+        return insertEmptyTask(at: insertAt, level: parent.indentLevel + 1)
+    }
+
+    /// Inserts an empty sibling directly below `sibling` (and its subtree) at the *same* level, and
+    /// returns its id. Drives the rapid-fire add flow: committing one new subtask opens the next one
+    /// at the same depth, so Return keeps you on the same level instead of nesting deeper. Reads the
+    /// sibling's level from the *live* `tasks` so a mid-flow indent/outdent carries over. `nil` if the
+    /// sibling is no longer present (e.g. it was an empty row just removed on commit — ends the flow).
+    @discardableResult
+    func addSibling(below sibling: TaskItem) -> UUID? {
+        guard let index = tasks.firstIndex(where: { $0.id == sibling.id }),
+              let spot = TaskOutline.siblingInsertion(tasks, after: index) else { return nil }
+        return insertEmptyTask(at: spot.index, level: spot.level)
+    }
+
+    /// Inserts an empty task at `index` with `level`, optimistically updating `tasks` and persisting
+    /// the insert + full `sortIndex` renumber in one transaction. Shared by `addSubtask`/`addSibling`.
+    @discardableResult
+    private func insertEmptyTask(at index: Int, level: Int) -> UUID {
+        let task = TaskItem(noteId: noteID, text: "", sortIndex: index, indentLevel: level)
+        var ordered = tasks
+        ordered.insert(task, at: index)
+        tasks = ordered   // optimistic
+        let snapshot = task
+        let orderedSnapshot = ordered
+        Task { [db] in try? await db.insertTask(snapshot, reordering: orderedSnapshot) }
+        return task.id
+    }
+
+    /// Toggles a task's checkbox. Completion cascades down its subtree and bubbles up to ancestors
+    /// (see `TaskOutline.applyingToggle`); only the rows that actually changed are written, and
+    /// only their completion columns, so nothing clobbers a concurrent text edit.
+    func toggle(_ task: TaskItem) {
+        let updated = TaskOutline.applyingToggle(tasks, toggling: task.id, now: Date())
+        let changes = completionChanges(from: tasks, to: updated)
+        guard !changes.isEmpty else { return }
+        tasks = updated   // optimistic; the observation confirms
+        Task { [db] in try? await db.updateTaskCompletion(changes) }
+    }
+
+    /// Makes the task a subtask of the row above it (one level deeper), carrying any of its own
+    /// subtasks along. No-op at the start of the list or once at the maximum depth.
+    func indent(_ task: TaskItem) {
+        applyStructural(TaskOutline.indenting(tasks, id: task.id))
+    }
+
+    /// Promotes the task one level out, carrying its subtasks along. No-op when already top-level.
+    func outdent(_ task: TaskItem) {
+        applyStructural(TaskOutline.outdenting(tasks, id: task.id))
+    }
+
+    func commitText(_ task: TaskItem, _ rawText: String) {
+        // Trim only the outer whitespace/newlines; interior newlines are kept (multiline tasks).
+        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A blank (or whitespace-only) task is never kept — an abandoned new row just disappears —
+        // unless it holds an image. Checked before the "unchanged" guard so a freshly-added empty row
+        // (whose stored text is also empty) still gets removed on blur instead of lingering.
+        if text.isEmpty, imageCrops[task.id] == nil {
+            delete(task)
+            return
+        }
+        guard text != task.text else { return }
+        // Optimistically reflect the committed text so the row never flashes blank between leaving
+        // the editor and the observation confirming the write — matters most in the rapid-add flow,
+        // where each Return commits one row while opening the next.
+        if let index = tasks.firstIndex(where: { $0.id == task.id }) {
+            tasks[index].text = text
+        }
+        var updated = task
+        updated.text = text
+        let snapshot = updated
+        Task { [db] in try? await db.update(snapshot) }
+    }
+
+    /// Deletes a single task. Its subtasks are kept (not cascade-deleted); the survivors are
+    /// renormalised so a now-orphaned subtask can't render at an impossible depth. Tick states are
+    /// left as-is (structural edits never change completion).
+    func delete(_ task: TaskItem) {
+        let id = task.id
+        let survivors = tasks.filter { $0.id != id }
+        applyStructural(TaskOutline.normalizedLevels(survivors), deleteIds: [id])
+    }
+
+    /// Removes every completed task in one batch and renumbers/renormalises the survivors. A survivor
+    /// can never be orphaned — the cascade invariant means a not-done row's ancestors are also not-done
+    /// (so they survive too) — but we normalise for safety. Irreversible (no undo); the view guards
+    /// this behind a confirmation. Tick state of survivors is untouched (structural edit only).
+    func clearCompleted() {
+        let doneIds = tasks.filter(\.isDone).map(\.id)
+        guard !doneIds.isEmpty else { return }
+        let survivors = TaskOutline.normalizedLevels(tasks.filter { !$0.isDone })
+        applyStructural(survivors, deleteIds: doneIds, reorder: true)
+    }
+
+    /// Moves the task with `id` — and its whole subtree — so it lands at `insertionIndex` (an index
+    /// into the *current* ordering, 0...count), optionally re-nesting it to `targetLevel` (the
+    /// horizontal drag-to-nest). Called once on drop, not continuously during the drag.
+    func moveTask(id: UUID, toInsertionIndex insertionIndex: Int, targetLevel: Int? = nil) {
+        let reordered = TaskOutline.movingSubtree(
+            tasks, id: id, toInsertionIndex: insertionIndex, targetLevel: targetLevel
+        )
+        guard reordered != tasks else { return }   // no reorder and no re-nest → nothing to do
+        applyStructural(TaskOutline.normalizedLevels(reordered), reorder: true)
+    }
+
+    // MARK: - Structural helpers
+
+    /// Applies a structural edit, where `updated` is the new (already-normalised) task list. It
+    /// changes only nesting and order — **never tick state**: moving/indenting/deleting a task
+    /// preserves every checkbox exactly (completion only ever changes via an explicit `toggle`).
+    ///
+    /// Indent-level deltas are diffed **by id against the current `tasks`** (the DB-backed state) —
+    /// not by position — so a reorder that also re-nests still persists every changed level. The UI
+    /// updates optimistically and the (optional) delete / reorder + level changes are written in one
+    /// transaction so the observation only ever sees a valid outline.
+    private func applyStructural(_ updated: [TaskItem], deleteIds: [UUID] = [], reorder: Bool = false) {
+        let levels = TaskOutline.indentLevelChanges(from: tasks, to: updated)
+            .map { TaskLevelUpdate(id: $0.id, level: $0.level) }
+        // For a pure indent/outdent (no delete, no reorder) bail when nothing actually changed.
+        guard !deleteIds.isEmpty || reorder || !levels.isEmpty else { return }
+        tasks = updated   // optimistic; the observation confirms
+        let ordered = reorder ? updated : nil
+        Task { [db] in
+            try? await db.applyStructuralUpdate(deleteIds: deleteIds, reorder: ordered, levels: levels)
+        }
+    }
+
+    // MARK: - Image helpers
+
+    /// Keeps `thumbnails` in step with `imageCrops`: drops bitmaps for images that are gone and loads
+    /// any that are missing.
+    private func syncThumbnails() {
+        if thumbnails.keys.contains(where: { imageCrops[$0] == nil }) {
+            thumbnails = thumbnails.filter { imageCrops[$0.key] != nil }
+        }
+        for id in imageCrops.keys where thumbnails[id] == nil && !loadingThumbnails.contains(id) {
+            loadThumbnail(id)
+        }
+    }
+
+    /// Decodes `id`'s thumbnail off the main actor — from `data` when we already hold it (a paste),
+    /// otherwise read from the database — and publishes it unless the image was removed meanwhile.
+    /// Until it lands, a replaced image keeps showing its previous thumbnail rather than flashing empty.
+    private func loadThumbnail(_ id: UUID, data knownData: Data? = nil) {
+        loadingThumbnails.insert(id)
+        Task { [weak self, db] in
+            let data: Data?
+            if let knownData { data = knownData } else { data = try? await db.taskImageData(taskId: id) }
+            let thumbnail = await Task.detached { data.flatMap { TaskImage.thumbnail($0) } }.value
+            guard let self else { return }
+            loadingThumbnails.remove(id)
+            if imageCrops[id] != nil { thumbnails[id] = thumbnail }
+        }
+    }
+
+    /// The `isDone`/`completedAt` deltas between two same-ordered task lists.
+    private func completionChanges(from before: [TaskItem], to after: [TaskItem]) -> [TaskCompletionUpdate] {
+        TaskOutline.completionChanges(from: before, to: after)
+    }
+}
+
+// MARK: - Note-level actions: title, appearance, window behaviour, display options, lifecycle
+
+extension NoteController {
+    // MARK: - Note actions
+
+    func commitTitle(_ rawTitle: String) {
+        let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard title != note.title else { return }
+        note.title = title
+        let id = noteID
+        Task { [db] in try? await db.updateNoteTitle(id: id, title: title) }
+    }
+
+    // MARK: - Appearance
+
+    func setColor(_ color: NoteColor) {
+        guard color != note.color else { return }
+        note.color = color
+        let id = noteID
+        let material = note.material
+        Task { [db] in try? await db.updateNoteAppearance(id: id, color: color, material: material) }
+    }
+
+    func setMaterial(_ material: NoteMaterial) {
+        guard material != note.material else { return }
+        note.material = material
+        let id = noteID
+        let color = note.color
+        Task { [db] in try? await db.updateNoteAppearance(id: id, color: color, material: material) }
+    }
+
+    // MARK: - Behaviour flags
+
+    func toggleFloatOnTop() {
+        note.floatOnTop.toggle()
+        let id = noteID
+        let floatOnTop = note.floatOnTop
+        let showOnAllSpaces = note.showOnAllSpaces
+        let isCollapsed = note.isCollapsed
+        onApplyBehavior?(floatOnTop, showOnAllSpaces)   // update the live window at once
+        Task { [db] in
+            try? await db.updateNoteFlags(
+                id: id, floatOnTop: floatOnTop,
+                showOnAllSpaces: showOnAllSpaces, isCollapsed: isCollapsed
+            )
+        }
+    }
+
+    // MARK: - Icon and privacy
+
+    /// ⋯ › Icon: an emoji or symbol before the title (nil removes it).
+    func setIcon(_ icon: NoteIcon?) {
+        let stored = icon?.stored
+        guard stored != note.icon else { return }
+        note.icon = stored
+        let id = noteID
+        Task { [db] in try? await db.updateNoteIcon(id: id, icon: stored) }
+    }
+
+    /// Persists the edge the note is docked to (nil: undocked). The window side is the manager's. Always
+    /// written, never skipped as unchanged: `note` can still hold a stale row from its observation (seen under
+    /// load), and skipping on that left a note docked in the database after it was undocked.
+    func setDockEdge(_ edge: DockEdge?) {
+        note.dockEdge = edge
+        let id = noteID
+        Task { [db] in try? await db.updateNoteDock(id: id, edge: edge) }
+    }
+
+    /// ⋯ › Private.
+    func togglePrivate() {
+        note.isPrivate.toggle()
+        let id = noteID
+        let isPrivate = note.isPrivate
+        onPrivacyChange?()
+        Task { [db] in try? await db.updateNotePrivate(id: id, isPrivate: isPrivate) }
+    }
+
+    /// ⋯ › Over full-screen apps: a pinned note also stays on every desktop and above full-screen apps. Kept
+    /// through an unpin (the switch hides, the value waits for the next pin).
+    func toggleShowOnAllSpaces() {
+        note.showOnAllSpaces.toggle()
+        let id = noteID
+        let floatOnTop = note.floatOnTop
+        let showOnAllSpaces = note.showOnAllSpaces
+        let isCollapsed = note.isCollapsed
+        onApplyBehavior?(floatOnTop, showOnAllSpaces)
+        Task { [db] in
+            try? await db.updateNoteFlags(
+                id: id, floatOnTop: floatOnTop,
+                showOnAllSpaces: showOnAllSpaces, isCollapsed: isCollapsed
+            )
+        }
+    }
+
+    /// Rolls the note up to just its title bar (or back down), like Stickies.
+    func toggleCollapsed() {
+        note.isCollapsed.toggle()
+        let id = noteID
+        let collapsed = note.isCollapsed
+        let floatOnTop = note.floatOnTop
+        let showOnAllSpaces = note.showOnAllSpaces
+        onSetCollapsed?(collapsed)   // resize the live window at once
+        Task { [db] in
+            try? await db.updateNoteFlags(
+                id: id, floatOnTop: floatOnTop,
+                showOnAllSpaces: showOnAllSpaces, isCollapsed: collapsed
+            )
+        }
+    }
+
+    // MARK: - List display options
+
+    /// Hides completed rows from the checklist (they stay in the DB; toggle to show them again).
+    func toggleHideCompleted() {
+        note.hideCompleted.toggle()
+        persistListOptions()
+    }
+
+    /// Keeps completed subtrees sunk to the bottom of each sibling group. While on, drag-reorder is
+    /// paused (the auto-sort would override a manual drop) — see `isReorderable`.
+    func toggleMoveCompletedToBottom() {
+        note.moveCompletedToBottom.toggle()
+        persistListOptions()
+    }
+
+    private func persistListOptions() {
+        let id = noteID
+        let hide = note.hideCompleted
+        let move = note.moveCompletedToBottom
+        Task { [db] in try? await db.updateNoteListOptions(id: id, hideCompleted: hide, moveCompletedToBottom: move) }
+    }
+
+    /// The task list as the view should render it: the source-of-truth `tasks` with the per-note
+    /// display options applied. Identical (same order, same elements) to `tasks` when both options are
+    /// off, so the default checklist and its drag-reorder path are untouched.
+    var displayedTasks: [TaskItem] {
+        var display = tasks
+        if note.moveCompletedToBottom { display = TaskOutline.sortedCompletedToBottom(display) }
+        if note.hideCompleted { display = TaskOutline.hidingCompleted(display) }
+        return display
+    }
+
+    /// Drag-reorder is coherent only when it isn't fighting an automatic sort. Hiding still allows it
+    /// (the drop index is remapped via `trueInsertionIndex`); move-to-bottom pauses it.
+    var isReorderable: Bool { !note.moveCompletedToBottom }
+
+    /// How many tasks are currently completed (drives the clear button's visibility/label).
+    var completedCount: Int { tasks.lazy.filter(\.isDone).count }
+
+    /// Translates a drop index expressed in **displayed** coordinates into an insertion index into the
+    /// true `tasks` array (what `moveTask` expects). It's the identity when `displayedTasks == tasks`;
+    /// in hide-only mode (a filtered subsequence) it anchors on the visible neighbour's id so a drop
+    /// lands in the right place even with hidden done rows interleaved.
+    func trueInsertionIndex(forDisplayedIndex displayedIndex: Int) -> Int {
+        let display = displayedTasks
+        if displayedIndex >= display.count {
+            guard let last = display.last,
+                  let lastTrue = tasks.firstIndex(where: { $0.id == last.id }) else { return tasks.count }
+            return TaskOutline.subtreeRange(tasks, at: lastTrue).upperBound   // after the last visible subtree
+        }
+        return tasks.firstIndex(where: { $0.id == display[displayedIndex].id }) ?? tasks.count
+    }
+
+    // MARK: - Lifecycle
+
+    /// Hides this note (closes its panel). The note stays in the DB and reopens next launch.
+    func requestClose() {
+        onClose?()
+    }
+
+    /// Creates a new, separate note.
+    func requestNewNote() {
+        onNewNote?()
+    }
+}
+
+extension NoteController {
+    /// New crops, plus a fresh thumbnail for any image whose content changed under the same task — a
+    /// replacement made on another Mac, where the crop may well be the same. The old thumbnail stays up
+    /// until the new one is decoded.
+    fileprivate func applyObservedImages(_ images: [UUID: TaskImageState]) {
+        let replaced = images.compactMap { id, image -> UUID? in
+            guard let hash = image.hash, let known = imageHashes[id], known != hash else { return nil }
+            return id
+        }
+        imageHashes = images.compactMapValues(\.hash)
+        imageCrops = images.mapValues(\.crop)
+        syncThumbnails()
+        for id in replaced where !loadingThumbnails.contains(id) { loadThumbnail(id) }
+    }
+
+    /// Switches sync with the user's other Macs on or off for this list (⋯ › Sync).
+    func toggleSynced() {
+        note.isSynced.toggle()
+        let id = noteID, on = note.isSynced
+        Task { [db] in try? await db.updateNoteSynced(id: id, isSynced: on) }
+    }
+}

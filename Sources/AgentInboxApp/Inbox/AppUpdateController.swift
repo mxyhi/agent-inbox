@@ -5,7 +5,7 @@ import Sparkle
 
 /// Sparkle 自动更新门面。仅在打包版 Info.plist 写入 feed 与公钥后启动，避免本地裸二进制误报配置错误。
 @MainActor
-final class AppUpdateController: ObservableObject {
+final class AppUpdateController {
     private var updaterController: SPUStandardUpdaterController?
 
     var canCheckForUpdates: Bool {

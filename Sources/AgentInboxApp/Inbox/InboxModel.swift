@@ -1,33 +1,34 @@
 import AppKit
 import Foundation
 import AgentInboxCore
+import Observation
 import OSLog
 
-/// 主 ViewModel —— 串联「后台扫描 → 快照解析 → UI 发布」
-/// 扫描跑在 CompositeSessionMonitor 上,主线程零文件 IO。
+/// 收件箱模型 —— 串联「后台扫描 → 快照解析 → UI 发布」。
+/// 扫描跑在 CompositeSessionMonitor 上，主线程零文件 IO。
+/// 收件箱便签（`NoteKind.agentInbox`）、菜单栏和设置都读这一份快照；待办不写入便签的 task 表。
 @MainActor
-final class AppViewModel: ObservableObject {
-    @Published private(set) var snapshot: AgentSnapshot = .empty
-    @Published private(set) var isPanelVisible = false
-    @Published private(set) var promptFilterRules: [PromptFilterRule] = []
-    @Published var pinMode: PinMode = .todoOnly
-    @Published var openSessionConfig: OpenSessionConfig = OpenSessionConfig()
-    @Published var updateProxyConfig: NetworkProxyConfig = NetworkProxyConfig()
+@Observable
+final class InboxModel {
+    private(set) var snapshot: AgentSnapshot = .empty
+    private(set) var promptFilterRules: [PromptFilterRule] = []
+    private(set) var openSessionConfig: OpenSessionConfig = OpenSessionConfig()
+    private(set) var updateProxyConfig: NetworkProxyConfig = NetworkProxyConfig()
 
-    private let monitor: CompositeSessionMonitor
-    private let resolver: AgentStatusResolver
-    private let stateStore: StateStore
-    private let executor: OpenSessionExecutor
-    private let notificationController: UserNotificationController
-    private let logger = Logger(subsystem: "agent-inbox", category: "AppViewModel")
-    private var persistedState = PersistedState()
-    private var reconcileTask: Task<Void, Never>?
-    private var debounceTask: Task<Void, Never>?
-    private var watcher: SessionsWatcher?
-    private var pendingChangedPaths: Set<String> = []
-    private var hasLoadedInitialSnapshot = false
-    private var pendingNotificationSessionID: String?
-    private var isSelectingSuperconductorSession = false
+    @ObservationIgnored private let monitor: CompositeSessionMonitor
+    @ObservationIgnored private let resolver: AgentStatusResolver
+    @ObservationIgnored private let stateStore: StateStore
+    @ObservationIgnored private let executor: OpenSessionExecutor
+    @ObservationIgnored private let notificationController: UserNotificationController
+    @ObservationIgnored private let logger = Logger(subsystem: "agent-inbox", category: "InboxModel")
+    @ObservationIgnored private var persistedState = PersistedState()
+    @ObservationIgnored private var reconcileTask: Task<Void, Never>?
+    @ObservationIgnored private var debounceTask: Task<Void, Never>?
+    @ObservationIgnored private var watcher: SessionsWatcher?
+    @ObservationIgnored private var pendingChangedPaths: Set<String> = []
+    @ObservationIgnored private var hasLoadedInitialSnapshot = false
+    @ObservationIgnored private var pendingNotificationSessionID: String?
+    @ObservationIgnored private var isSelectingSuperconductorSession = false
 
     init(
         monitor: CompositeSessionMonitor = CompositeSessionMonitor(),
@@ -48,19 +49,18 @@ final class AppViewModel: ObservableObject {
 
     // MARK: - 生命周期
 
-    /// 一次性加载持久化状态(必须在浮窗定位前完成,因为要恢复窗口锚点)
+    /// 一次性加载持久化状态（必须在创建收件箱便签前完成：首次建便签时沿用旧浮窗锚点）
     func prepare() async {
         persistedState = await stateStore.load()
-        pinMode = persistedState.pinMode
         promptFilterRules = persistedState.promptFilterRules
         openSessionConfig = persistedState.openSessionConfig
         updateProxyConfig = persistedState.updateProxyConfig
         logger.info(
-            "持久化状态已加载,pinMode=\(self.pinMode.rawValue, privacy: .public),filterRules=\(self.promptFilterRules.count),openMethod=\(self.openSessionConfig.method.rawValue, privacy: .public),updateProxySet=\(!self.updateProxyConfig.isEmpty, privacy: .public)"
+            "持久化状态已加载,filterRules=\(self.promptFilterRules.count),openMethod=\(self.openSessionConfig.method.rawValue, privacy: .public),updateProxySet=\(!self.updateProxyConfig.isEmpty, privacy: .public)"
         )
     }
 
-    /// 启动首扫:在浮窗显示前建立快照,避免条件置顶模式用空快照先降级为普通窗口。
+    /// 启动首扫：先建立快照，避免条件置顶模式用空快照先把便签降级为普通窗口。
     func loadInitialSnapshot() async {
         guard !hasLoadedInitialSnapshot else { return }
 
@@ -205,18 +205,6 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func setPinMode(_ mode: PinMode) {
-        guard pinMode != mode else { return }
-
-        pinMode = mode
-        persistedState.pinMode = mode
-        logger.info("置顶模式变更: \(mode.rawValue, privacy: .public)")
-
-        Task {
-            await stateStore.save(persistedState)
-        }
-    }
-
     func setOpenSessionConfig(_ config: OpenSessionConfig) {
         guard openSessionConfig != config else { return }
 
@@ -331,39 +319,14 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    /// 浮窗显隐状态由 AppKit 控制器回写,菜单项据此展示下一步动作。
-    func setPanelVisible(_ visible: Bool) {
-        guard isPanelVisible != visible else { return }
+    // MARK: - 旧浮窗位置
 
-        isPanelVisible = visible
-        logger.info("浮窗可见状态变更: \(visible, privacy: .public)")
-    }
-
-    // MARK: - 浮窗位置持久化
-
-    /// 当前已保存的窗口锚点(nil = 使用默认右上角)
-    var panelAnchor: PanelAnchor? {
+    /// 旧版浮窗保存的右上角锚点；只在首次创建收件箱便签时用来摆放，之后位置由便签自己持久化。
+    var legacyPanelAnchor: PanelAnchor? {
         persistedState.panelAnchor
     }
 
-    /// 保存窗口锚点(用户拖动结束后由 FloatingPanelController 调用)
-    func savePanelAnchor(_ anchor: PanelAnchor?) {
-        guard persistedState.panelAnchor != anchor else { return }
-
-        persistedState.panelAnchor = anchor
-        logger.debug("窗口锚点已更新")
-
-        Task {
-            await stateStore.save(persistedState)
-        }
-    }
-
     // MARK: - 派生状态
-
-    /// 浮窗是否应当置顶(由置顶模式 × 快照共同决定)
-    var shouldFloatWindow: Bool {
-        pinMode.shouldFloat(for: snapshot)
-    }
 
     /// 菜单栏图标 —— 待办 > 运行中 > 完成历史 > 空闲
     var menuBarSystemImage: String {
@@ -391,11 +354,6 @@ final class AppViewModel: ObservableObject {
             return snapshot.hasCompletedHistory ? "全部完成" : "暂无 Agent 任务"
         }
         return parts.joined(separator: " · ")
-    }
-
-    /// 菜单栏按钮标题:显示当前可执行动作,避免“显示/隐藏”二义性。
-    var panelVisibilityMenuTitle: String {
-        isPanelVisible ? "隐藏浮窗" : "显示浮窗"
     }
 
     // MARK: - 内部
