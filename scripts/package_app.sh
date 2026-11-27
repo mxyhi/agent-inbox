@@ -33,12 +33,14 @@ if [[ ! "${BUILD_NUMBER}" =~ ^[0-9]+([.][0-9]+)*$ ]]; then
     exit 1
 fi
 
+# 多架构构建走 Xcode 构建系统，-Xswiftc 会作用到 GRDB 等源码依赖且不屏蔽它们的告警；
+# Xcode 26.6 SDK 下 GRDB 有 Sendable 告警，加 -warnings-as-errors 会让发版失败。
+# 我们自己代码的「告警即错误」由 CI 的 swift test 保证。
 swift_build_args=(
     -c release
     --product "${PRODUCT_NAME}"
     -Xswiftc -strict-concurrency=complete
     -Xswiftc -warn-concurrency
-    -Xswiftc -warnings-as-errors
 )
 for arch in ${ARCHS}; do
     swift_build_args+=(--arch "${arch}")
