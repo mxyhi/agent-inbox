@@ -251,10 +251,10 @@ final class FolderSync {
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             lastSynced = Date()
             problem = newer.isEmpty ? nil
-                : "\(newer.map(\.name).joined(separator: ", ")) runs a newer Tic. "
-                    + "Update Tic on this Mac to keep syncing with it."
+                : "\(newer.map(\.name).joined(separator: ", ")) runs a newer Agent Inbox. "
+                    + "Update Agent Inbox on this Mac to keep syncing with it."
         } catch {
-            NSLog("[Tic] sync failed: \(error)")
+            NSLog("[Agent Inbox] sync failed: \(error)")
             problem = "Sync failed: \(error.localizedDescription)"
         }
     }

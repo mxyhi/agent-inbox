@@ -22,7 +22,7 @@ struct MCPClientsTests {
         #expect(claudeDesktop?.configPath?.contains("claude_desktop_config.json") == true)
         let claudeCode = clients.first { $0.name == "Claude Code" }
         #expect(claudeCode?.configPath == nil)                       // CLI install
-        #expect(claudeCode?.snippet.hasPrefix("claude mcp add tic") == true)
+        #expect(claudeCode?.snippet.hasPrefix("claude mcp add agent-inbox") == true)
     }
 
     @Test("Cursor and VS Code offer install deeplinks; file clients don't")

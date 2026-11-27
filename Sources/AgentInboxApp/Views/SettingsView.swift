@@ -215,7 +215,7 @@ private struct AgentsSettings: View {
     private let inApplications: Bool
 
     init() {
-        let exe = Bundle.main.executableURL?.path ?? "Tic"
+        let exe = Bundle.main.executableURL?.path ?? "agent-inbox"
         clients = MCPClients.all(executablePath: exe)
         inApplications = Bundle.main.bundleURL.path.hasPrefix("/Applications")
         _selection = State(initialValue: "Claude Code")
@@ -227,7 +227,7 @@ private struct AgentsSettings: View {
         Form {
             Section {
                 Toggle(isOn: Binding(get: { model.mcpEnabled }, set: { model.setMCPEnabled($0) })) {
-                    Text("Allow AI agents to use Tic")
+                    Text("Allow AI agents to use your lists")
                     Text("Lets Claude, Cursor and other MCP clients draft and tick your lists.")
                 }
                 LabeledContent("Status") {
@@ -267,7 +267,7 @@ private struct AgentsSettings: View {
                 Text("Connect a client")
             } footer: {
                 if !inApplications {
-                    Text("Tic isn't in /Applications. The path in this command changes if you move the app.")
+                    Text("Agent Inbox isn't in /Applications. The path in this command changes if you move the app.")
                         .foregroundStyle(.secondary)
                 }
             }

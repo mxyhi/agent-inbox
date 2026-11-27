@@ -107,7 +107,7 @@ final class MCPService: @unchecked Sendable {
             reconnectionConfig: .init(enabled: false)
         )
         let server = Server(
-            name: "Tic",
+            name: "Agent Inbox",
             version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev",
             instructions: Self.instructions,
             capabilities: .init(tools: .init())
@@ -125,7 +125,7 @@ final class MCPService: @unchecked Sendable {
             do {
                 try await server.start(transport: transport)
             } catch {
-                NSLog("[Tic] MCP session failed to start: \(error)")
+                NSLog("[Agent Inbox] MCP session failed to start: \(error)")
             }
             await server.waitUntilCompleted()
             self?.drop(key)

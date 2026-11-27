@@ -22,7 +22,7 @@ struct MCPServiceTests {
             reconnectionConfig: .init(enabled: false)
         )
         let handshake = try await client.connect(transport: transport)
-        #expect(handshake.serverInfo.name == "Tic")
+        #expect(handshake.serverInfo.name == "Agent Inbox")
         #expect(service.connectionCount == 1)
 
         let listed = try await client.listTools()

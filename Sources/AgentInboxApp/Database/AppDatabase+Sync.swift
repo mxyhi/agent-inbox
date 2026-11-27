@@ -63,7 +63,7 @@ extension AppDatabase {
             Table("taskImage").select(Column("hash"), Column("cropX"), Column("cropY"),
                                       Column("cropW"), Column("cropH"))
         )
-        .start(in: dbQueue, onError: { NSLog("[Tic] sync observation failed: \($0)") }, onChange: { _ in onChange() })
+        .start(in: dbQueue, onError: { NSLog("[Agent Inbox] sync observation failed: \($0)") }, onChange: { _ in onChange() })
     }
 
     /// The content hashes of every image this Mac holds (to know which files to fetch).

@@ -14,7 +14,7 @@ extension MCPTools {
 
         return [
             Tool(name: "list_notes",
-                 description: "List every Tic note (sticky) with its id, title, colour, and whether it's on screen. Call get_note for a note's tasks.",
+                 description: "List every Agent Inbox list (sticky note) with its id, title, colour, and whether it's on screen. Call get_note for a note's tasks.",
                  inputSchema: object([:]), annotations: readOnly),
 
             Tool(name: "get_note",
@@ -34,7 +34,7 @@ extension MCPTools {
                     "collapsed": prop("boolean", "Start rolled up to just the title bar"),
                     "icon": prop("string", "An emoji, or symbol:<name> drawn in the note's ink (\(NoteIcon.symbols.joined(separator: ", "))); an empty string removes it"),
                     "private": prop("boolean", "Keep the note out of screen shares where macOS allows, and cover it while the user shares"),
-                    "focus": prop("boolean", "Bring Tic to the front and focus the new note (default just surfaces it without stealing focus)"),
+                    "focus": prop("boolean", "Bring Agent Inbox to the front and focus the new note (default just surfaces it without stealing focus)"),
                  ])),
 
             Tool(name: "update_note",
@@ -52,7 +52,7 @@ extension MCPTools {
                     "hide_completed": prop("boolean", "Hide checked-off tasks"),
                     "move_completed_to_bottom": prop("boolean", "Sink checked tasks to the bottom"),
                     "open": prop("boolean", "true surfaces the note (above other apps), false hides it"),
-                    "focus": prop("boolean", "Bring Tic to the front and focus the note (stronger than open)"),
+                    "focus": prop("boolean", "Bring Agent Inbox to the front and focus the note (stronger than open)"),
                  ], required: ["note_id"])),
 
             Tool(name: "move_note",
@@ -64,7 +64,7 @@ extension MCPTools {
                  ], required: ["note_id"])),
 
             Tool(name: "focus_note",
-                 description: "Bring a note to the front and focus it (activates Tic, makes it the key window). Use to draw attention; plain writes surface a note without stealing focus.",
+                 description: "Bring a note to the front and focus it (activates Agent Inbox, makes it the key window). Use to draw attention; plain writes surface a note without stealing focus.",
                  inputSchema: object(["note_id": prop("string", "The note's id")], required: ["note_id"])),
 
             Tool(name: "delete_note",

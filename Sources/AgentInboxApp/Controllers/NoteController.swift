@@ -86,7 +86,7 @@ final class NoteController {
                     self?.tasks = items
                 }
             } catch {
-                NSLog("[Tic] task observation ended for \(noteID): \(error)")
+                NSLog("[Agent Inbox] task observation ended for \(noteID): \(error)")
             }
         }
         // The note's own row: an agent (or any other writer) changing the title, colour, flags, or
@@ -98,7 +98,7 @@ final class NoteController {
                     if let updated { self?.applyObservedNote(updated) }
                 }
             } catch {
-                NSLog("[Tic] note observation ended for \(noteID): \(error)")
+                NSLog("[Agent Inbox] note observation ended for \(noteID): \(error)")
             }
         }
         imageObservation?.cancel()
@@ -108,7 +108,7 @@ final class NoteController {
                     self?.applyObservedImages(images)
                 }
             } catch {
-                NSLog("[Tic] image observation ended for \(noteID): \(error)")
+                NSLog("[Agent Inbox] image observation ended for \(noteID): \(error)")
             }
         }
     }

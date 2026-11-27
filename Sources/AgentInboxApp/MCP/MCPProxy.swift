@@ -23,7 +23,7 @@ enum MCPProxy {
             case .failed, .waiting:
                 connection.cancel()
                 guard attemptsLeft > 0 else {
-                    die("Tic: MCP is off. Turn it on in Tic › Settings › AI Agents.")
+                    die("Agent Inbox: MCP is off. Turn it on in Agent Inbox › Settings › AI Agents.")
                 }
                 DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(250)) {
                     connect(path, attemptsLeft: attemptsLeft - 1)

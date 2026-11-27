@@ -116,7 +116,7 @@ struct ListsSearchView: View {
     private var footer: some View {
         HStack(spacing: 10) {
             Image(systemName: "checklist").font(.system(size: 13)).foregroundStyle(.secondary)
-            Text("Tic Lists").font(.caption).foregroundStyle(.secondary)
+            Text("Lists").font(.caption).foregroundStyle(.secondary)
             Spacer()
             hint("Navigate", "↑↓")
             hint("Open", "↩")

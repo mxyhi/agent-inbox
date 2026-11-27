@@ -145,9 +145,9 @@ final class NoteWindowManager: NSObject, NSWindowDelegate {
         do {
             let notes = try await appDatabase.openNotes()
             for note in notes { openNote(note, makeKey: false) }   // launch: show, don't steal focus
-            NSLog("[Tic] restored \(notes.count) note panel(s)")
+            NSLog("[Agent Inbox] restored \(notes.count) note panel(s)")
         } catch {
-            NSLog("[Tic] restoreAll failed: \(error)")
+            NSLog("[Agent Inbox] restoreAll failed: \(error)")
         }
     }
 
@@ -251,7 +251,7 @@ final class NoteWindowManager: NSObject, NSWindowDelegate {
             openNote(note)
             controllers[note.id]?.requestRename()   // a new list starts with its name being typed
         } catch {
-            NSLog("[Tic] newNote failed: \(error)")
+            NSLog("[Agent Inbox] newNote failed: \(error)")
         }
     }
 
@@ -267,7 +267,7 @@ final class NoteWindowManager: NSObject, NSWindowDelegate {
             try await appDatabase.deleteNote(id: note.id)
             panels[note.id]?.close()   // only tear down once the row is actually gone
         } catch {
-            NSLog("[Tic] deleteNote failed: \(error)")
+            NSLog("[Agent Inbox] deleteNote failed: \(error)")
         }
     }
 

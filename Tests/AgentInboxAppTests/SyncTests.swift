@@ -342,6 +342,6 @@ struct FolderSyncTests {
         let (db, sync) = try mac("Work MacBook", folder: root.appendingPathComponent("Tic"))
         await sync.sync()
         #expect(try await db.allNotes().isEmpty)
-        #expect(sync.problem?.contains("runs a newer Tic") == true)
+        #expect(sync.problem?.contains("runs a newer Agent Inbox") == true)
     }
 }

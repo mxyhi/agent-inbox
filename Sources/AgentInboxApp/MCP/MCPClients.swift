@@ -35,7 +35,7 @@ enum MCPClients {
         let mcpServers = """
         {
           "mcpServers": {
-            "tic": {
+            "agent-inbox": {
               "command": "\(exe)",
               "args": ["--mcp"]
             }
@@ -46,9 +46,9 @@ enum MCPClients {
         // One-click install URLs. Cursor takes base64 of the inner server config; VS Code takes the
         // URL-encoded server object. Both open the app and pre-fill the config.
         let cursorConfig = "{\"command\":\"\(exe)\",\"args\":[\"--mcp\"]}"
-        let cursorLink = "cursor://anysphere.cursor-deeplink/mcp/install?name=tic&config="
+        let cursorLink = "cursor://anysphere.cursor-deeplink/mcp/install?name=agent-inbox&config="
             + urlEncode(Data(cursorConfig.utf8).base64EncodedString())
-        let vscodeObject = "{\"name\":\"tic\",\"command\":\"\(exe)\",\"args\":[\"--mcp\"]}"
+        let vscodeObject = "{\"name\":\"agent-inbox\",\"command\":\"\(exe)\",\"args\":[\"--mcp\"]}"
         let vscodeLink = "vscode:mcp/install?" + urlEncode(vscodeObject)
 
         return [
@@ -60,7 +60,7 @@ enum MCPClients {
             MCPClient(id: "Claude Code",
                 detail: "Run this once in your terminal.",
                 install: .command,
-                snippet: "claude mcp add tic -- \"\(exe)\" --mcp"),
+                snippet: "claude mcp add agent-inbox -- \"\(exe)\" --mcp"),
 
             MCPClient(id: "Cursor",
                 detail: "Click Add to Cursor, or paste this into Cursor's MCP config.",
@@ -70,14 +70,14 @@ enum MCPClients {
             MCPClient(id: "VS Code",
                 detail: "Click Add to VS Code, or run this once in a terminal.",
                 install: .command,
-                snippet: "code --add-mcp '{\"name\":\"tic\",\"command\":\"\(exe)\",\"args\":[\"--mcp\"]}'",
+                snippet: "code --add-mcp '{\"name\":\"agent-inbox\",\"command\":\"\(exe)\",\"args\":[\"--mcp\"]}'",
                 deeplink: vscodeLink),
 
             MCPClient(id: "Codex CLI",
                 detail: "Add this block to your Codex config.",
                 install: .configFile(path: "~/.codex/config.toml"),
                 snippet: """
-                [mcp_servers.tic]
+                [mcp_servers.agent-inbox]
                 command = "\(exe)"
                 args = ["--mcp"]
                 """),
@@ -98,7 +98,7 @@ enum MCPClients {
                 snippet: """
                 {
                   "context_servers": {
-                    "tic": {
+                    "agent-inbox": {
                       "command": { "path": "\(exe)", "args": ["--mcp"] }
                     }
                   }
