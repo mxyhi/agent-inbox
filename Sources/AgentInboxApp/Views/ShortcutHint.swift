@@ -6,7 +6,7 @@ import SwiftUI
 /// keycap rail. Theme-aware so it reads on every paper colour and on glass.
 struct ShortcutHint: View {
     let glyphs: String
-    let label: String
+    let label: LocalizedStringKey
     let theme: NoteTheme
 
     var body: some View {
@@ -30,6 +30,6 @@ struct ShortcutHint: View {
         }
         .lineLimit(1)
         .fixedSize()
-        .accessibilityLabel("\(label) shortcut")
+        .accessibilityLabel(Text("\(Text(label)) shortcut"))
     }
 }

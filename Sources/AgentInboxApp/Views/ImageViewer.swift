@@ -26,7 +26,7 @@ struct ImageViewer: View {
 
     private var title: String {
         let text = controller.tasks.first(where: { $0.id == taskId })?.text ?? ""
-        return text.split(separator: "\n").first.map(String.init) ?? "Image"
+        return text.split(separator: "\n").first.map(String.init) ?? String(localized: "Image")
     }
 
     var body: some View {

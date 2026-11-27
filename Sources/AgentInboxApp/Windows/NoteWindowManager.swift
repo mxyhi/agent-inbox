@@ -356,7 +356,7 @@ final class NoteWindowManager: NSObject, NSWindowDelegate {
         imageWindow = window
         imageWindowNoteID = controller.noteID
         let text = controller.tasks.first(where: { $0.id == taskId })?.text ?? ""
-        window.title = text.split(separator: "\n").first.map(String.init) ?? "Image"
+        window.title = text.split(separator: "\n").first.map(String.init) ?? String(localized: "Image")
         window.contentView = NSHostingView(
             rootView: ImageViewer(controller: controller, taskId: taskId) { [weak window] in window?.close() }
         )
@@ -514,7 +514,7 @@ extension NoteWindowManager {
     private func tabSize(_ id: UUID) -> CGSize {
         guard let controller = controllers[id] else { return CGSize(width: DockLayout.maxTabWidth, height: 64) }
         let note = controller.note
-        let title = controller.isCovered ? "Private" : (note.title.isEmpty ? "Untitled List" : note.title)
+        let title = controller.isCovered ? String(localized: "Private") : (note.title.isEmpty ? String(localized: "Untitled List") : note.title)
         let width = (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold)]).width
         var extra: CGFloat = 26
         if !controller.isCovered, NoteIcon(stored: note.icon) != nil { extra += 19 }

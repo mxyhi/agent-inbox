@@ -42,9 +42,10 @@ enum SettingsTab: String {
 private func settingsWhen(_ date: Date) -> String {
     let time = date.formatted(date: .omitted, time: .shortened)
     let calendar = Calendar.current
-    if calendar.isDateInToday(date) { return "today at \(time)" }
-    if calendar.isDateInYesterday(date) { return "yesterday at \(time)" }
-    return "\(date.formatted(.dateTime.day().month(.abbreviated))) at \(time)"
+    if calendar.isDateInToday(date) { return String(localized: "today at \(time)") }
+    if calendar.isDateInYesterday(date) { return String(localized: "yesterday at \(time)") }
+    let day = date.formatted(.dateTime.day().month(.abbreviated))
+    return String(localized: "\(day) at \(time)")
 }
 
 // MARK: - General
@@ -80,10 +81,10 @@ private struct GeneralSettings: View {
                     shortVersionString: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
                 ))
                 LabeledContent {
-                    Button("检查更新…") { model.updater.checkForUpdates() }
+                    Button("Check for Updates…") { model.updater.checkForUpdates() }
                         .disabled(!model.updater.canCheckForUpdates)
                 } label: {
-                    Text(model.updater.canCheckForUpdates ? "通过 Sparkle 自动检查更新" : "更新需要打包后的 app")
+                    Text(model.updater.canCheckForUpdates ? "Updates are checked automatically with Sparkle" : "Updates need the packaged app")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -111,8 +112,8 @@ private struct SyncSettings: View {
                 }
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("Sync is new and still experimental. If a list looks wrong, turn sync off for it and "
-                          + "tell us what happened.", systemImage: "flask")
+                    Label("Sync is new and still experimental. If a list looks wrong, turn sync off for it and tell us what happened.",
+                          systemImage: "flask")
                     Link("Report a Problem…", destination: URL(string: "https://github.com/mxyhi/agent-inbox/issues/new")!)
                 }
                 .foregroundStyle(.secondary)
@@ -120,7 +121,7 @@ private struct SyncSettings: View {
             Section {
                 HStack {
                     Label {
-                        Text(sync.folderDisplayName ?? "No folder chosen")
+                        Text(sync.folderDisplayName ?? String(localized: "No folder chosen"))
                     } icon: {
                         Image(systemName: "folder.fill").foregroundStyle(.tint)
                     }
@@ -135,8 +136,7 @@ private struct SyncSettings: View {
             } header: {
                 Text("Sync folder")
             } footer: {
-                Text("Choose the same folder on each Mac. iCloud Drive, Dropbox, Google Drive, OneDrive "
-                     + "and Syncthing folders all work.")
+                Text("Choose the same folder on each Mac. iCloud Drive, Dropbox, Google Drive, OneDrive and Syncthing folders all work.")
                     .foregroundStyle(.secondary)
             }
             if sync.isEnabled {
@@ -158,7 +158,7 @@ private struct SyncSettings: View {
                     }
                     ForEach(sync.peers) { peer in
                         LabeledContent(peer.name, value: peer.latestChange
-                            .map { "Latest changes \(settingsWhen($0))" } ?? "No changes yet")
+                            .map { String(localized: "Latest changes \(settingsWhen($0))") } ?? String(localized: "No changes yet"))
                     }
                 } header: {
                     Text("Macs")
@@ -176,7 +176,7 @@ private struct SyncSettings: View {
                     )) {
                         HStack(spacing: 8) {
                             RoundedRectangle(cornerRadius: 3).fill(note.color.fill).frame(width: 10, height: 10)
-                            Text(note.title.isEmpty ? "Untitled List" : note.title).lineLimit(1)
+                            Text(note.title.isEmpty ? String(localized: "Untitled List") : note.title).lineLimit(1)
                         }
                     }
                 }
@@ -185,8 +185,7 @@ private struct SyncSettings: View {
             } footer: {
                 let synced = model.notes.filter(\.isSynced).count
                 Text(sync.isEnabled
-                     ? "\(synced) of \(model.notes.count) lists sync. New lists don't sync until you turn it on, "
-                        + "here or from the list's ⋯ menu."
+                     ? "\(synced) of \(model.notes.count) lists sync. New lists don't sync until you turn it on, here or from the list's ⋯ menu."
                      : "Turn on sync to choose lists.")
                     .foregroundStyle(.secondary)
             }
@@ -197,8 +196,8 @@ private struct SyncSettings: View {
     }
 
     private var thisMacStatus: String {
-        if sync.problem != nil { return "Needs attention" }
-        return sync.lastSynced == nil ? "Starting…" : "Up to date"
+        if sync.problem != nil { return String(localized: "Needs attention") }
+        return sync.lastSynced == nil ? String(localized: "Starting…") : String(localized: "Up to date")
     }
 }
 
@@ -278,9 +277,9 @@ private struct AgentsSettings: View {
     }
 
     private var statusText: String {
-        guard model.mcpEnabled else { return "Off" }
+        guard model.mcpEnabled else { return String(localized: "Off") }
         let n = model.mcpConnections
-        return n == 0 ? "Running · no agents connected" : "Running · \(n) connected"
+        return n == 0 ? String(localized: "Running · no agents connected") : String(localized: "Running · \(n) connected")
     }
 
     private func copy() {

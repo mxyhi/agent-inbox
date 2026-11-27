@@ -105,8 +105,8 @@ final class FolderSync {
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = "Use Folder"
-        panel.message = "Choose a folder that each of your Macs syncs, such as one in iCloud Drive or Dropbox."
+        panel.prompt = String(localized: "Use Folder")
+        panel.message = String(localized: "Choose a folder that each of your Macs syncs, such as one in iCloud Drive or Dropbox.")
         panel.directoryURL = folder ?? Self.iCloudDrive()
         NSApp.activate()
         guard panel.runModal() == .OK, let url = panel.url else { return false }
@@ -203,8 +203,7 @@ final class FolderSync {
         do {
             read = try await Task.detached { try Self.read(folder, excluding: me) }.value
         } catch {
-            problem = "Can't reach this folder. Check that it still exists and that its sync app is running, "
-                + "or choose another folder."
+            problem = String(localized: "Can't reach this folder. Check that it still exists and that its sync app is running, or choose another folder.")
             return
         }
 
@@ -251,11 +250,10 @@ final class FolderSync {
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             lastSynced = Date()
             problem = newer.isEmpty ? nil
-                : "\(newer.map(\.name).joined(separator: ", ")) runs a newer Agent Inbox. "
-                    + "Update Agent Inbox on this Mac to keep syncing with it."
+                : String(localized: "\(newer.map(\.name).formatted(.list(type: .and))) runs a newer Agent Inbox. Update Agent Inbox on this Mac to keep syncing with it.")
         } catch {
             NSLog("[Agent Inbox] sync failed: \(error)")
-            problem = "Sync failed: \(error.localizedDescription)"
+            problem = String(localized: "Sync failed: \(error.localizedDescription)")
         }
     }
 

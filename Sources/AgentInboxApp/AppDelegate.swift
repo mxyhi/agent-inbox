@@ -44,7 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Right-click the Dock icon → New List.
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
-        let item = NSMenuItem(title: "New List", action: #selector(newListFromDock), keyEquivalent: "")
+        let item = NSMenuItem(title: String(localized: "New List"), action: #selector(newListFromDock), keyEquivalent: "")
         item.target = self
         menu.addItem(item)
         return menu

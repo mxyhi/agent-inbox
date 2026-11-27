@@ -39,5 +39,8 @@ jobs:
       - name: Run tests
         run: swift test -Xswiftc -strict-concurrency=complete -Xswiftc -warn-concurrency -Xswiftc -warnings-as-errors
 
+      - name: Check localization
+        run: scripts/l10n.sh check
+
       - name: Build release executable
         run: swift build -c release --product agent-inbox -Xswiftc -strict-concurrency=complete -Xswiftc -warn-concurrency -Xswiftc -warnings-as-errors

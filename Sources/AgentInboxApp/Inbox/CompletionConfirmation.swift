@@ -10,10 +10,10 @@ func confirmCompleteAllTodos(count: Int) -> Bool {
 
     let alert = NSAlert()
     alert.alertStyle = .warning
-    alert.messageText = "全部标记完成?"
-    alert.informativeText = "将把 \(count) 个待办标记为完成。此操作会写入本机状态。"
-    alert.addButton(withTitle: "全部完成")
-    alert.addButton(withTitle: "取消")
+    alert.messageText = String(localized: "Mark all done?")
+    alert.informativeText = String(localized: "This marks \(count) todos as done. The change is saved on this Mac.")
+    alert.addButton(withTitle: String(localized: "Mark All Done"))
+    alert.addButton(withTitle: String(localized: "Cancel"))
 
     NSApp.activate(ignoringOtherApps: true)
     let confirmed = alert.runModal() == .alertFirstButtonReturn

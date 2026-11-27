@@ -94,6 +94,10 @@ done
 
 iconutil -c icns "${iconset_dir}" -o "${ICON_PATH}"
 
+# 界面文案按系统语言从 Contents/Resources/<lang>.lproj 查（Bundle.main）。
+log "compiling localizations"
+"${ROOT_DIR}/scripts/l10n.sh" compile "${RESOURCES_DIR}"
+
 sparkle_framework="$(find "${ROOT_DIR}/.build" -type d -path '*Sparkle.xcframework/macos*/Sparkle.framework' | sort | head -n 1)"
 if [[ -z "${sparkle_framework}" ]]; then
     log "Sparkle.framework not found"
@@ -113,6 +117,7 @@ plutil -insert CFBundleInfoDictionaryVersion -string "6.0" "${INFO_PLIST}"
 plutil -insert CFBundleName -string "${APP_NAME}" "${INFO_PLIST}"
 plutil -insert CFBundleDisplayName -string "${APP_NAME}" "${INFO_PLIST}"
 plutil -insert CFBundleIconFile -string "${ICON_NAME}" "${INFO_PLIST}"
+plutil -insert CFBundleLocalizations -json '["en", "zh-Hans"]' "${INFO_PLIST}"
 plutil -insert CFBundlePackageType -string "APPL" "${INFO_PLIST}"
 plutil -insert CFBundleShortVersionString -string "${VERSION}" "${INFO_PLIST}"
 plutil -insert CFBundleVersion -string "${BUILD_NUMBER}" "${INFO_PLIST}"

@@ -136,7 +136,7 @@ public enum PromptFilterField: String, Codable, CaseIterable, Sendable, Identifi
     public var label: String {
         switch self {
         case .firstPrompt:
-            "首个提示词"
+            String(localized: "First prompt")
         }
     }
 }
@@ -151,9 +151,9 @@ public enum PromptFilterMatchType: String, Codable, CaseIterable, Sendable, Iden
     public var label: String {
         switch self {
         case .contains:
-            "包含"
+            String(localized: "Contains")
         case .equals:
-            "等于"
+            String(localized: "Equals")
         }
     }
 }
@@ -167,7 +167,7 @@ public enum PromptFilterAction: String, Codable, CaseIterable, Sendable, Identif
     public var label: String {
         switch self {
         case .hideFromTodos:
-            "不进入待办"
+            String(localized: "Hide from todos")
         }
     }
 }
@@ -382,13 +382,13 @@ public enum OpenSessionMethod: String, Codable, CaseIterable, Sendable, Identifi
         case .finder:
             "Finder"
         case .terminal:
-            "终端"
+            String(localized: "Terminal")
         case .vscode:
             "VS Code"
         case .superconductor:
             "SC"
         case .custom:
-            "自定义命令"
+            String(localized: "Custom Command")
         }
     }
 
@@ -396,15 +396,15 @@ public enum OpenSessionMethod: String, Codable, CaseIterable, Sendable, Identifi
     public var description: String {
         switch self {
         case .finder:
-            "在 Finder 中打开工作目录"
+            String(localized: "Open the working directory in Finder")
         case .terminal:
-            "在终端中打开工作目录"
+            String(localized: "Open the working directory in Terminal")
         case .vscode:
-            "使用 VS Code 打开工作目录"
+            String(localized: "Open the working directory in VS Code")
         case .superconductor:
-            "在 Superconductor 中打开目录并尝试定位原会话"
+            String(localized: "Open the directory in Superconductor and try to find the original session")
         case .custom:
-            "执行自定义 shell 命令"
+            String(localized: "Run a custom shell command")
         }
     }
 }
@@ -427,11 +427,11 @@ public struct OpenSessionConfig: Codable, Equatable, Sendable {
 
     /// 支持的模板变量列表（用于 UI 提示）
     public static let supportedVariables: [(name: String, description: String)] = [
-        ("$session_id", "源原生会话 ID"),
-        ("$provider", "会话源(codex/grok/claude/dsh)"),
-        ("$cwd", "工作目录路径"),
-        ("$file_path", "会话文件或目录路径"),
-        ("$project_name", "项目名称")
+        ("$session_id", String(localized: "Session ID from the source tool")),
+        ("$provider", String(localized: "Session source (codex/grok/claude/dsh)")),
+        ("$cwd", String(localized: "Working directory path")),
+        ("$file_path", String(localized: "Session file or directory path")),
+        ("$project_name", String(localized: "Project name"))
     ]
 
     /// 示例命令模板

@@ -17,7 +17,9 @@ App 层改用 [tic](https://github.com/mxyhi/tic)（MIT，基于 84bb4fe，许�
 - 便签库是新文件 `~/Library/Application Support/Agent Inbox/notes.sqlite`；`state.sqlite` 原样沿用。首次启动用旧 `panelAnchor` 摆放收件箱便签，之后不再读写该锚点。
 - 不再种入 tic 的欢迎清单；同步文件夹默认 `iCloud Drive/Agent Inbox`，与独立安装的 Tic.app 互不干扰。
 - 从 accessory 变为 Dock + 菜单栏双入口（tic 的交互依赖前台激活）；打包不再写 `LSUIElement`。
-- 界面语言：收件箱与菜单栏中文，tic 的清单、设置通用页仍为英文（未做本地化）。
+- 界面语言：跟随系统，支持英文（源语言）与简体中文。文案在 `Assets/Localization/Localizable.xcstrings`，打包时编译进 `Contents/Resources/<lang>.lproj`，运行时从 `Bundle.main` 查（不用 SwiftPM 的 `Bundle.module`，这样 SwiftUI 的字面量文案不用逐个传 bundle）。
+  - 新增或修改文案：代码里写英文 key（SwiftUI 字面量或 `String(localized:)`；传给自定义组件的参数用 `LocalizedStringKey`，`String` 参数不会被翻译），然后 `scripts/l10n.sh sync` 并补 zh-Hans 译文。CI 的 `scripts/l10n.sh check` 和 `LocalizationCatalogTests` 分别拦住漏抽取和漏翻译。
+  - 不翻译：MCP 工具描述（给 Agent 看）、日志、`--mcp` 代理的命令行报错、用户数据（清单标题、会话内容）。新建清单的默认名按创建时的语言写入（如「清单 1」）。
 
 ### 结构
 

@@ -26,7 +26,7 @@ struct InboxSessionRows: View {
                     )
                 }
                 if !snapshot.running.isEmpty {
-                    Text("运行中")
+                    Text("Running")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(theme.secondary)
                         .padding(.top, snapshot.todos.isEmpty ? 2 : 8)
@@ -47,7 +47,7 @@ struct InboxSessionRows: View {
             .contextMenu { contextMenuItems }
             .animation(.easeInOut(duration: 0.2), value: snapshot)
             .onChange(of: snapshot.todos.count) { oldCount, newCount in
-                if newCount > oldCount { announce("有新的 Agent 待办") }
+                if newCount > oldCount { announce(String(localized: "New agent todo")) }
             }
         }
     }
@@ -55,14 +55,14 @@ struct InboxSessionRows: View {
     @ViewBuilder
     private var contextMenuItems: some View {
         if !snapshot.todos.isEmpty {
-            Button("全部标记完成") {
+            Button("Mark All Done") {
                 if confirmCompleteAllTodos(count: snapshot.todos.count) {
                     inbox.completeAllTodos()
                 }
             }
             Divider()
         }
-        Button("立即刷新") { inbox.refreshNow() }
+        Button("Refresh Now") { inbox.refreshNow() }
     }
 
     /// 出现新待办时向 VoiceOver 播报。
@@ -102,7 +102,7 @@ private struct InboxTodoRow: View {
                     .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.plain)
-            .help(needsReply ? "标记已处理（不会替你回答原会话）" : "标记已处理")
+            .help(needsReply ? "Mark as handled (doesn't answer the session for you)" : "Mark as handled")
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(session.projectName)
@@ -118,7 +118,7 @@ private struct InboxTodoRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .onTapGesture(perform: onOpen)
-            .help("打开会话")
+            .help("Open session")
 
             InboxMeta(provider: session.provider, theme: theme) {
                 RelativeAge(date: needsReply ? session.modifiedAt : session.taskCompletedAt ?? session.modifiedAt)
@@ -126,19 +126,20 @@ private struct InboxTodoRow: View {
         }
         .padding(.vertical, 3)
         .contextMenu {
-            Button("打开会话", action: onOpen)
-            Button("标记已处理", action: check)
+            Button("Open Session", action: onOpen)
+            Button("Mark as Handled", action: check)
             if session.firstPrompt?.trimmedNonEmpty != nil {
-                Button("按此提示词过滤", action: onCreateFilter)
+                Button("Filter Out This Prompt", action: onCreateFilter)
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("待办：\(session.projectName)")
+        .accessibilityLabel("Todo: \(session.projectName)")
     }
 
     private var detail: String? {
         if needsReply {
-            return "等你回复：" + (session.pendingQuestion?.trimmedNonEmpty ?? "需要你选择、审批或输入")
+            let question = session.pendingQuestion?.trimmedNonEmpty ?? String(localized: "Needs your choice, approval or input")
+            return String(localized: "Waiting for your reply: \(question)")
         }
         return session.lastAgentMessage?.trimmedNonEmpty ?? session.firstPrompt?.trimmedNonEmpty
     }
@@ -190,9 +191,9 @@ private struct InboxRunningRow: View {
         .padding(.vertical, 3)
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
-        .contextMenu { Button("打开会话", action: onOpen) }
+        .contextMenu { Button("Open Session", action: onOpen) }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("运行中：\(session.projectName)")
+        .accessibilityLabel("Running: \(session.projectName)")
     }
 }
 
@@ -215,7 +216,7 @@ private struct InboxMeta<Time: View>: View {
     }
 }
 
-/// 「刚刚 / N 分钟前 / N 小时前 / N 天前」，每分钟刷新一次。
+/// 「刚刚 / N 分钟前 / N 小时前 / N 天前」（随系统语言），每分钟刷新一次。
 private struct RelativeAge: View {
     let date: Date
 
@@ -227,10 +228,10 @@ private struct RelativeAge: View {
 
     static func format(_ date: Date, now: Date) -> String {
         let interval = now.timeIntervalSince(date)
-        if interval < 60 { return "刚刚" }
-        if interval < 3600 { return "\(Int(interval / 60)) 分钟前" }
-        if interval < 86400 { return "\(Int(interval / 3600)) 小时前" }
-        if interval < 604800 { return "\(Int(interval / 86400)) 天前" }
+        if interval < 60 { return String(localized: "Just now") }
+        if interval < 3600 { return String(localized: "\(Int(interval / 60))m ago") }
+        if interval < 86400 { return String(localized: "\(Int(interval / 3600))h ago") }
+        if interval < 604800 { return String(localized: "\(Int(interval / 86400))d ago") }
         return date.formatted(date: .numeric, time: .omitted)
     }
 }

@@ -100,7 +100,7 @@ final class UserNotificationController: NSObject {
         alert.alertStyle = .warning
         alert.messageText = title
         alert.informativeText = message
-        alert.addButton(withTitle: "好")
+        alert.addButton(withTitle: String(localized: "OK"))
         alert.runModal()
         userNotificationLogger.info("已使用原生对话框展示通知后备提示")
     }

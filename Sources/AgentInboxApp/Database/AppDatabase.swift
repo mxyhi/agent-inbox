@@ -196,8 +196,8 @@ final class AppDatabase: Sendable {
                 let count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM note WHERE kind = 'list'") ?? 0
                 let titles = try String.fetchSet(db, sql: "SELECT title FROM note WHERE kind = 'list'")
                 var n = count + 1
-                while titles.contains("List \(n)") { n += 1 }
-                stored.title = "List \(n)"
+                while titles.contains(String(localized: "List \(n)")) { n += 1 }
+                stored.title = String(localized: "List \(n)")
             }
             try stored.insert(db)
             return stored

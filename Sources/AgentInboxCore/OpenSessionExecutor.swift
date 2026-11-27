@@ -254,16 +254,16 @@ public enum OpenSessionError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .missingWorkingDirectory:
-            return "会话没有可用的工作目录"
+            return String(localized: "The session has no working directory")
         case .superconductorUnavailable:
-            return "找不到 Superconductor 的 sc 命令"
+            return String(localized: "Can't find Superconductor's sc command")
         case .emptyCustomCommand:
-            return "自定义命令不能为空"
+            return String(localized: "The custom command is empty")
         case .commandFailed(let command, let exitCode, let stderr):
             let preview = command.prefix(50)
-            return "命令执行失败 (退出码 \(exitCode)): \(preview)\n\(stderr)"
+            return String(localized: "Command failed (exit code \(exitCode)): \(String(preview))\n\(stderr)")
         case .executionFailed(let underlying):
-            return "命令执行异常: \(underlying.localizedDescription)"
+            return String(localized: "Couldn't run the command: \(underlying.localizedDescription)")
         }
     }
 }

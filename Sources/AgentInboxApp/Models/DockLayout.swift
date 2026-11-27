@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 
 /// The display edge a note is docked to (per Mac, like its frame).
 enum DockEdge: String, Codable, Sendable {
@@ -13,8 +14,8 @@ enum DockTabStyle: String, CaseIterable, Identifiable, Sendable {
 
     var label: String {
         switch self {
-        case .title: "Title"
-        case .titleCount: "Title + count"
+        case .title: String(localized: "Title")
+        case .titleCount: String(localized: "Title + count")
         }
     }
 }

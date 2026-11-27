@@ -146,10 +146,10 @@ final class OpenSessionExecutorTests: XCTestCase {
     func testOpenSessionMethodLabels() {
         // Given/When/Then: 验证各方式的标签
         XCTAssertEqual(OpenSessionMethod.finder.label, "Finder")
-        XCTAssertEqual(OpenSessionMethod.terminal.label, "终端")
+        XCTAssertEqual(OpenSessionMethod.terminal.label, "Terminal")
         XCTAssertEqual(OpenSessionMethod.vscode.label, "VS Code")
         XCTAssertEqual(OpenSessionMethod.superconductor.label, "SC")
-        XCTAssertEqual(OpenSessionMethod.custom.label, "自定义命令")
+        XCTAssertEqual(OpenSessionMethod.custom.label, "Custom Command")
     }
 
     func testSupportedVariables() {

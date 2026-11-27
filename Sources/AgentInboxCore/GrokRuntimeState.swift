@@ -237,7 +237,7 @@ final class GrokRuntimeState {
                 self.permissions.removeAll()
             case "permission_requested":
                 let tool = event.tool_name ?? "tool"
-                self.permissions.append(Request(id: "permission:\(event.ts ?? ""):\(tool)", question: "Grok 等待批准：\(tool)", tool: tool, at: self.date(event.ts)))
+                self.permissions.append(Request(id: "permission:\(event.ts ?? ""):\(tool)", question: String(localized: "Grok is waiting for approval: \(tool)"), tool: tool, at: self.date(event.ts)))
             case "permission_resolved":
                 if let index = self.permissions.firstIndex(where: { $0.tool == (event.tool_name ?? "tool") }) {
                     self.permissions.remove(at: index)
@@ -279,7 +279,7 @@ final class GrokRuntimeState {
                 if let id = update.task_id { self.deletedSchedules.remove(id) }
             case "tool_call":
                 if update.rawInput?.variant == "AskUserQuestion", let id = update.toolCallId {
-                    self.questions[id] = Request(id: id, question: "Grok 等待你回答问题", tool: "ask_user_question", at: nil)
+                    self.questions[id] = Request(id: id, question: String(localized: "Grok is waiting for your answer"), tool: "ask_user_question", at: nil)
                 }
             case "tool_call_update":
                 if let id = update.toolCallId, ["completed", "failed"].contains(update.status ?? "") { self.questions.removeValue(forKey: id) }

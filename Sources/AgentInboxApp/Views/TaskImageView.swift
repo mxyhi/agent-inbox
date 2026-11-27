@@ -75,7 +75,7 @@ struct TaskImageView: View {
     }
 
     /// A small glyph on a frosted disc, legible over any picture.
-    private func glyphButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
+    private func glyphButton(_ symbol: String, help: LocalizedStringKey, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 10, weight: .semibold))
@@ -155,7 +155,7 @@ struct TaskImageView: View {
     }
 
     /// A shortcut hint that's also clickable, so crop mode can be left with the mouse too.
-    private func hintButton(glyphs: String, label: String, action: @escaping () -> Void) -> some View {
+    private func hintButton(glyphs: String, label: LocalizedStringKey, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             ShortcutHint(glyphs: glyphs, label: label, theme: theme)
         }

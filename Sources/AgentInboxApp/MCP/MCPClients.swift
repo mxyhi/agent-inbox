@@ -10,14 +10,16 @@ struct MCPClient: Identifiable, Sendable {
         case command                     // snippet is a shell command to run
     }
 
-    let id: String            // also the display name
+    let id: String            // also the display name, unless `localizedName` is set
     let detail: String        // the one-line "how"
     let install: Install
     let snippet: String
     /// A one-click "Add to <app>" URL, for clients that support an install deeplink.
     var deeplink: String? = nil
+    /// Display name for entries that aren't a product name; `id` stays stable for the picker.
+    var localizedName: String? = nil
 
-    var name: String { id }
+    var name: String { localizedName ?? id }
     var configPath: String? { if case let .configFile(path) = install { return path } else { return nil } }
 }
 
@@ -53,28 +55,28 @@ enum MCPClients {
 
         return [
             MCPClient(id: "Claude Desktop",
-                detail: "Add this to your Claude Desktop config, then restart Claude.",
+                detail: String(localized: "Add this to your Claude Desktop config, then restart Claude."),
                 install: .configFile(path: "~/Library/Application Support/Claude/claude_desktop_config.json"),
                 snippet: mcpServers),
 
             MCPClient(id: "Claude Code",
-                detail: "Run this once in your terminal.",
+                detail: String(localized: "Run this once in your terminal."),
                 install: .command,
                 snippet: "claude mcp add agent-inbox -- \"\(exe)\" --mcp"),
 
             MCPClient(id: "Cursor",
-                detail: "Click Add to Cursor, or paste this into Cursor's MCP config.",
+                detail: String(localized: "Click Add to Cursor, or paste this into Cursor's MCP config."),
                 install: .configFile(path: "~/.cursor/mcp.json"),
                 snippet: mcpServers, deeplink: cursorLink),
 
             MCPClient(id: "VS Code",
-                detail: "Click Add to VS Code, or run this once in a terminal.",
+                detail: String(localized: "Click Add to VS Code, or run this once in a terminal."),
                 install: .command,
                 snippet: "code --add-mcp '{\"name\":\"agent-inbox\",\"command\":\"\(exe)\",\"args\":[\"--mcp\"]}'",
                 deeplink: vscodeLink),
 
             MCPClient(id: "Codex CLI",
-                detail: "Add this block to your Codex config.",
+                detail: String(localized: "Add this block to your Codex config."),
                 install: .configFile(path: "~/.codex/config.toml"),
                 snippet: """
                 [mcp_servers.agent-inbox]
@@ -83,17 +85,17 @@ enum MCPClients {
                 """),
 
             MCPClient(id: "Gemini CLI",
-                detail: "Add this to your Gemini CLI settings.",
+                detail: String(localized: "Add this to your Gemini CLI settings."),
                 install: .configFile(path: "~/.gemini/settings.json"),
                 snippet: mcpServers),
 
             MCPClient(id: "Windsurf",
-                detail: "Add this to Windsurf's MCP config, then refresh.",
+                detail: String(localized: "Add this to Windsurf's MCP config, then refresh."),
                 install: .configFile(path: "~/.codeium/windsurf/mcp_config.json"),
                 snippet: mcpServers),
 
             MCPClient(id: "Zed",
-                detail: "Add this to your Zed settings.",
+                detail: String(localized: "Add this to your Zed settings."),
                 install: .configFile(path: "~/.config/zed/settings.json"),
                 snippet: """
                 {
@@ -106,9 +108,10 @@ enum MCPClients {
                 """),
 
             MCPClient(id: "Other (JSON)",
-                detail: "Most clients accept this standard MCP server block.",
+                detail: String(localized: "Most clients accept this standard MCP server block."),
                 install: .command,
-                snippet: mcpServers),
+                snippet: mcpServers,
+                localizedName: String(localized: "Other (JSON)")),
         ]
     }
 }

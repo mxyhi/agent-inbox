@@ -129,7 +129,7 @@ final class InboxModel {
         guard let session = snapshot.todos.first(where: { $0.id == id })
             ?? snapshot.running.first(where: { $0.id == id }) else {
             logger.warning("openSession 未找到会话: \(id, privacy: .public)")
-            notificationController.show(title: "打开失败", message: "未找到会话 \(id)")
+            notificationController.show(title: String(localized: "Couldn't Open Session"), message: String(localized: "Session not found: \(id)"))
             return
         }
 
@@ -147,7 +147,7 @@ final class InboxModel {
                     logger.info("SC 打开流程完成: \(id, privacy: .public)")
                 } catch {
                     logger.error("SC 打开失败: \(String(describing: error), privacy: .public)")
-                    notificationController.show(title: "打开会话失败", message: error.localizedDescription)
+                    notificationController.show(title: String(localized: "Couldn't Open Session"), message: error.localizedDescription)
                 }
             }
         } else {
@@ -156,7 +156,7 @@ final class InboxModel {
                 logger.info("成功打开会话: \(id, privacy: .public), method=\(config.method.rawValue, privacy: .public)")
             } catch {
                 logger.error("打开会话失败: \(String(describing: error), privacy: .public)")
-                notificationController.show(title: "打开会话失败", message: error.localizedDescription)
+                notificationController.show(title: String(localized: "Couldn't Open Session"), message: error.localizedDescription)
             }
         }
     }
@@ -345,13 +345,13 @@ final class InboxModel {
     var menuSummary: String {
         var parts: [String] = []
         if snapshot.hasTodo {
-            parts.append("\(snapshot.todos.count) 个待办")
+            parts.append(String(localized: "\(snapshot.todos.count) todos"))
         }
         if snapshot.isActive {
-            parts.append("\(snapshot.running.count) 个运行中")
+            parts.append(String(localized: "\(snapshot.running.count) running"))
         }
         if parts.isEmpty {
-            return snapshot.hasCompletedHistory ? "全部完成" : "暂无 Agent 任务"
+            return snapshot.hasCompletedHistory ? String(localized: "All done") : String(localized: "No agent tasks")
         }
         return parts.joined(separator: " · ")
     }
@@ -430,14 +430,14 @@ final class InboxModel {
     private func notifyNewTodos(_ todos: [SessionSummary]) {
         guard !todos.isEmpty else { return }
 
-        let title = todos.count == 1 ? "有新待办" : "有 \(todos.count) 个新待办"
+        let title = todos.count == 1 ? String(localized: "New todo") : String(localized: "\(todos.count) new todos")
         // 产品语义:agent 停住等你下一步(不只是「会话结束」)
         let message = if let todo = todos.first, todos.count == 1 {
             todo.lifecycleState == .waitingForUser
-                ? "\(todo.projectName)：\(todo.pendingQuestion ?? "需要你处理选择、审批或输入")"
-                : "\(todo.projectName) 的 Agent 等待下一步提示"
+                ? String(localized: "\(todo.projectName): \(todo.pendingQuestion ?? String(localized: "Needs your choice, approval or input"))")
+                : String(localized: "The agent in \(todo.projectName) is waiting for your next prompt")
         } else {
-            "\(todos.count) 个 Agent 需要你处理"
+            String(localized: "\(todos.count) agents need you")
         }
         notificationController.show(
             title: title,

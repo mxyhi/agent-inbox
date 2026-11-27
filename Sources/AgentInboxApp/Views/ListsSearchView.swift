@@ -126,7 +126,7 @@ struct ListsSearchView: View {
         .background(Color.primary.opacity(0.04))
     }
 
-    private func hint(_ label: String, _ key: String) -> some View {
+    private func hint(_ label: LocalizedStringKey, _ key: String) -> some View {
         HStack(spacing: 5) {
             Text(label).font(.caption).foregroundStyle(.secondary)
             Text(key)
@@ -167,7 +167,7 @@ private struct ListRow: View {
     @State private var hover = false
     @State private var confirming = false
 
-    private var title: String { note.title.isEmpty ? "Untitled List" : note.title }
+    private var title: String { note.title.isEmpty ? String(localized: "Untitled List") : note.title }
 
     var body: some View {
         HStack(spacing: 10) {

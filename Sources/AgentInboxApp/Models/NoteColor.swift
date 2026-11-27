@@ -12,7 +12,16 @@ enum NoteColor: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
-    var displayName: String { rawValue.capitalized }
+    var displayName: String {
+        switch self {
+        case .yellow:   return String(localized: "Yellow")
+        case .pink:     return String(localized: "Pink")
+        case .blue:     return String(localized: "Blue")
+        case .green:    return String(localized: "Green")
+        case .purple:   return String(localized: "Purple")
+        case .graphite: return String(localized: "Graphite")
+        }
+    }
 
     // MARK: - Paper
 

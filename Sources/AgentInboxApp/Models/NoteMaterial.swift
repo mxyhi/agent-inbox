@@ -8,5 +8,11 @@ enum NoteMaterial: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
-    var displayName: String { rawValue.capitalized }
+    var displayName: String {
+        switch self {
+        case .solid:       return String(localized: "Solid")
+        case .glass:       return String(localized: "Glass")
+        case .transparent: return String(localized: "Transparent")
+        }
+    }
 }

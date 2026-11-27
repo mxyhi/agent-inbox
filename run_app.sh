@@ -3,8 +3,11 @@
 echo "🚀 启动 Agent Inbox 应用..."
 echo ""
 
-# 启动应用
-.build/arm64-apple-macosx/debug/agent-inbox > /tmp/agent-inbox.log 2>&1 &
+# 界面文案从可执行文件旁的 <lang>.lproj 查；缺了就只显示英文。
+scripts/l10n.sh compile .build/debug
+
+# 启动应用（.build/debug 在新旧构建系统下都指向 debug 产物目录）
+.build/debug/agent-inbox > /tmp/agent-inbox.log 2>&1 &
 MPID=$!
 
 sleep 3

@@ -47,13 +47,13 @@ struct LiftedRow: View {
                 .font(.system(size: 16, weight: .regular))
                 .foregroundStyle(task.isDone ? theme.checkbox : theme.secondary)
             Text(renderCache.rendered(
-                text: task.text.isEmpty ? "Image" : task.text,
+                text: task.text.isEmpty ? String(localized: "Image") : task.text,
                 color: task.isDone ? theme.completed : theme.task
             ))
             .lineLimit(1)
             Spacer(minLength: 0)
             if carried > 0 {
-                Text("+\(carried)")
+                Text(verbatim: "+\(carried)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(theme.task)
                     .padding(.horizontal, 6)
@@ -109,7 +109,7 @@ struct DropPlaceholder: View {
                 .font(.system(size: 16, weight: .regular))
                 .foregroundStyle(theme.secondary)
             Text(renderCache.rendered(
-                text: (task.text.isEmpty ? "Image" : task.text) + (carried > 0 ? "  +\(carried)" : ""),
+                text: (task.text.isEmpty ? String(localized: "Image") : task.text) + (carried > 0 ? "  +\(carried)" : ""),
                 color: theme.task
             ))
             .lineLimit(1)

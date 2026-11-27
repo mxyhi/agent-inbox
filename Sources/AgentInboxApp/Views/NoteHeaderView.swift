@@ -114,7 +114,7 @@ struct NoteHeaderView: View {
                   ? "arrow.triangle.2.circlepath" : "exclamationmark.arrow.triangle.2.circlepath")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(trouble == nil ? theme.secondary : Color.orange)
-                .help(trouble ?? "Syncing with your other Macs")
+                .help(trouble ?? String(localized: "Syncing with your other Macs"))
                 .transition(.opacity)
         }
     }
@@ -150,7 +150,7 @@ struct NoteHeaderView: View {
     }
 
     private var titleLabel: some View {
-        Text(titleText.isEmpty ? "Untitled List" : titleText)
+        Text(titleText.isEmpty ? String(localized: "Untitled List") : titleText)
             .font(.headline.weight(.semibold))
             .foregroundStyle(titleText.isEmpty ? theme.secondary : theme.title)
             .lineLimit(1)
@@ -162,7 +162,7 @@ struct NoteHeaderView: View {
         let agentTodos = note.kind == .agentInbox ? (inbox?.snapshot.todos.count ?? 0) : 0
         let remaining = agentTodos + controller.tasks.filter { !$0.isDone }.count
         if remaining > 0 {
-            Text("\(remaining)")
+            Text(verbatim: "\(remaining)")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(theme.secondary)
                 .padding(.horizontal, 6)
@@ -198,8 +198,7 @@ struct NoteHeaderView: View {
             closeButton
         }
         .confirmationDialog(
-            "Delete \(controller.completedCount) completed task\(controller.completedCount == 1 ? "" : "s")? "
-                + "This can't be undone.",
+            String(localized: "Delete \(controller.completedCount) completed tasks? This can't be undone."),
             isPresented: $showClearConfirm,
             titleVisibility: .visible
         ) {
@@ -268,7 +267,7 @@ struct NoteHeaderView: View {
     private func iconButton(
         systemName: String,
         isActive: Bool,
-        help: String,
+        help: LocalizedStringKey,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -365,7 +364,7 @@ extension NoteHeaderView {
 
     /// An option row's icon and title. The icon sits in a fixed-width column, so every title in the
     /// popover — switches and actions alike — starts at the same edge whatever the symbol's width.
-    private func optionLabel(_ title: String, systemImage: String) -> some View {
+    private func optionLabel(_ title: LocalizedStringKey, systemImage: String) -> some View {
         HStack(spacing: Self.optionIconGap) {
             Image(systemName: systemImage).frame(width: Self.optionIconWidth)
             Text(title).lineLimit(1)
@@ -374,7 +373,7 @@ extension NoteHeaderView {
 
     /// A switch row: the label on the left, the switch at the right edge, so every switch lines up.
     private func optionSwitch(
-        _ title: String, systemImage: String, experimental: Bool = false, isOn: Binding<Bool>
+        _ title: LocalizedStringKey, systemImage: String, experimental: Bool = false, isOn: Binding<Bool>
     ) -> some View {
         HStack(spacing: 12) {
             optionLabel(title, systemImage: systemImage)
@@ -456,7 +455,7 @@ extension NoteHeaderView {
     }
 
     /// A menu-like row in the popover; it closes the popover, then acts.
-    private func popoverAction(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+    private func popoverAction(_ title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
         Button {
             showOptions = false
             action()

@@ -106,9 +106,9 @@ struct SuperconductorSessionSelector {
         case notFound, ambiguous, changed
         var errorDescription: String? {
             switch self {
-            case .notFound: "未找到可精确定位的 SC 会话标签页，或会话位于暂不支持的分屏中"
-            case .ambiguous: "多个 SC 标签页匹配同一会话"
-            case .changed: "SC 标签页状态已变化或选择结果未通过回读"
+            case .notFound: String(localized: "Couldn't find the exact Superconductor tab for this session, or it is in an unsupported split view")
+            case .ambiguous: String(localized: "More than one Superconductor tab matches this session")
+            case .changed: String(localized: "The Superconductor tabs changed, or the selection couldn't be confirmed")
             }
         }
     }

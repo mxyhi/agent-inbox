@@ -44,12 +44,12 @@ private struct MenuBarContent: View {
         if inbox.snapshot.hasTodo {
             ForEach(inbox.snapshot.todos.prefix(Self.todoCount)) { session in
                 if session.lifecycleState == .waitingForUser {
-                    Button("去处理「\(session.projectName)」") { inbox.openSession(id: session.id) }
+                    Button("Handle “\(session.projectName)”") { inbox.openSession(id: session.id) }
                 }
-                Button("完成「\(session.projectName)」") { inbox.completeTodo(id: session.id) }
+                Button("Complete “\(session.projectName)”") { inbox.completeTodo(id: session.id) }
             }
             if inbox.snapshot.todos.count > 1 {
-                Button("全部标记完成") {
+                Button("Mark All Done") {
                     if confirmCompleteAllTodos(count: inbox.snapshot.todos.count) {
                         inbox.completeAllTodos()
                     }
@@ -57,8 +57,8 @@ private struct MenuBarContent: View {
             }
         }
 
-        Button("显示 Agent 收件箱") { model.openInbox() }
-        Button("立即刷新") { inbox.refreshNow() }
+        Button("Show Agent Inbox") { model.openInbox() }
+        Button("Refresh Now") { inbox.refreshNow() }
 
         Divider()
 
@@ -91,17 +91,17 @@ private struct MenuBarContent: View {
 
         Divider()
 
-        Button("检查更新…") { model.updater.checkForUpdates() }
+        Button("Check for Updates…") { model.updater.checkForUpdates() }
             .disabled(!model.updater.canCheckForUpdates)
 
         SettingsMenuItem()
 
-        Button("退出 Agent Inbox") { NSApplication.shared.terminate(nil) }
+        Button("Quit Agent Inbox") { NSApplication.shared.terminate(nil) }
             .keyboardShortcut("q")
     }
 
     private func label(_ note: Note) -> String {
-        note.title.isEmpty ? "Untitled List" : note.title
+        note.title.isEmpty ? String(localized: "Untitled List") : note.title
     }
 }
 

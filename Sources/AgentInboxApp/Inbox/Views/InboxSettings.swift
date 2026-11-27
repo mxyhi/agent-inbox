@@ -15,10 +15,10 @@ enum InboxSettingsCategory: String, CaseIterable, Identifiable, Hashable {
 
     var label: String {
         switch self {
-        case .open: return "打开方式"
-        case .data: return "数据"
-        case .filter: return "过滤"
-        case .network: return "网络"
+        case .open: return String(localized: "Open With")
+        case .data: return String(localized: "Data")
+        case .filter: return String(localized: "Filters")
+        case .network: return String(localized: "Network")
         }
     }
 }
@@ -65,32 +65,32 @@ private struct DataSettingsSection: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("Codex 会话目录") {
-                    Text("~/.codex/sessions")
+                LabeledContent("Codex sessions") {
+                    Text(verbatim: "~/.codex/sessions")
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
 
-                LabeledContent("Grok 会话目录") {
-                    Text("~/.grok/sessions")
+                LabeledContent("Grok sessions") {
+                    Text(verbatim: "~/.grok/sessions")
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
 
-                LabeledContent("Claude 会话目录") {
-                    Text("~/.claude/projects")
+                LabeledContent("Claude sessions") {
+                    Text(verbatim: "~/.claude/projects")
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
 
-                LabeledContent("DSH 会话目录") {
+                LabeledContent("DSH sessions") {
                     Text(DshSessionMonitor.defaultSessionsRoot.path)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
 
-                LabeledContent("状态存储") {
-                    Text("~/Library/Application Support/Agent Inbox")
+                LabeledContent("State storage") {
+                    Text(verbatim: "~/Library/Application Support/Agent Inbox")
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
@@ -107,7 +107,7 @@ private struct OpenSettingsSection: View {
     @State private var method: OpenSessionMethod
     @State private var customCommand: String
     @State private var isTestingCommand = false
-    @State private var testResult: String?
+    @State private var testResult: CommandTestResult?
 
     init(viewModel: InboxModel) {
         self.viewModel = viewModel
@@ -119,7 +119,7 @@ private struct OpenSettingsSection: View {
         Form {
             Section {
                 // 打开方式选择器
-                Picker("打开方式", selection: $method) {
+                Picker("Open With", selection: $method) {
                     ForEach(OpenSessionMethod.allCases) { method in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(method.label)
@@ -150,14 +150,14 @@ private struct OpenSettingsSection: View {
                             .multilineTextAlignment(.leading) // 强制左对齐
                             .onSubmit { saveConfig() }
                     } label: {
-                        Text("命令模板")
+                        Text("Template")
                             .frame(width: 80, alignment: .trailing)
                     }
 
                     // 变量参考表格 —— 紧凑的两列布局
                     GroupBox {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("可用变量")
+                            Text("Variables")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
 
@@ -184,7 +184,7 @@ private struct OpenSettingsSection: View {
                     // 示例命令 —— 代码块风格
                     GroupBox {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("示例")
+                            Text("Examples")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
 
@@ -216,7 +216,7 @@ private struct OpenSettingsSection: View {
                                     Image(systemName: "play.circle")
                                         .font(.caption)
                                 }
-                                Text("测试命令")
+                                Text("Test Command")
                                     .font(.caption)
                             }
                         }
@@ -224,18 +224,18 @@ private struct OpenSettingsSection: View {
 
                         if let result = testResult {
                             HStack(spacing: 4) {
-                                Image(systemName: result.contains("成功") ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                Image(systemName: result.succeeded ? "checkmark.circle.fill" : "xmark.circle.fill")
                                     .font(.caption)
-                                Text(result.replacingOccurrences(of: "✓ ", with: "").replacingOccurrences(of: "❌ ", with: ""))
+                                Text(result.message)
                                     .font(.caption)
                             }
-                            .foregroundStyle(result.contains("成功") ? .green : .red)
+                            .foregroundStyle(result.succeeded ? .green : .red)
                         }
                     }
                     .padding(.top, 4)
                 }
             } footer: {
-                Text("配置如何打开会话工作目录。更改会立即保存。")
+                Text("Choose how to open a session's working directory. Changes are saved right away.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -257,7 +257,7 @@ private struct OpenSettingsSection: View {
     private func testCommand() {
         guard method == .custom else { return }
         guard let testSession = viewModel.snapshot.todos.first ?? viewModel.snapshot.running.first else {
-            testResult = "❌ 没有可用的测试会话"
+            testResult = CommandTestResult(succeeded: false, message: String(localized: "No session to test with"))
             return
         }
 
@@ -269,9 +269,9 @@ private struct OpenSettingsSection: View {
                 let executor = OpenSessionExecutor()
                 let config = OpenSessionConfig(method: .custom, customCommand: customCommand)
                 try executor.execute(session: testSession, config: config)
-                testResult = "✓ 命令执行成功"
+                testResult = CommandTestResult(succeeded: true, message: String(localized: "Command ran successfully"))
             } catch {
-                testResult = "❌ \(error.localizedDescription)"
+                testResult = CommandTestResult(succeeded: false, message: error.localizedDescription)
             }
             isTestingCommand = false
 
@@ -282,6 +282,12 @@ private struct OpenSettingsSection: View {
     }
 }
 
+/// 自定义命令的测试结果；成功与否显式记录，不从文案里猜。
+private struct CommandTestResult {
+    let succeeded: Bool
+    let message: String
+}
+
 /// firstPrompt 过滤规则
 private struct FilterSettingsSection: View {
     let viewModel: InboxModel
@@ -290,11 +296,11 @@ private struct FilterSettingsSection: View {
         VStack(alignment: .leading, spacing: 16) {
             // 标题和说明
             VStack(alignment: .leading, spacing: 6) {
-                Text("提示词过滤")
+                Text("Prompt Filters")
                     .font(.title2)
                     .fontWeight(.semibold)
 
-                Text("符合条件的会话将自动跳过，不会出现在待办列表中")
+                Text("Matching sessions are skipped and won't show up as todos.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -320,11 +326,11 @@ private struct FilterSettingsSection: View {
                                 .font(.system(size: 48))
                                 .foregroundStyle(.tertiary)
 
-                            Text("还没有过滤规则")
+                            Text("No filter rules yet")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
 
-                            Text("添加规则后，匹配的会话将被自动过滤")
+                            Text("Once you add a rule, matching sessions are filtered out automatically.")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
                                 .multilineTextAlignment(.center)
@@ -381,7 +387,7 @@ private struct NetworkSettingsSection: View {
         let config = NetworkProxyConfig(urlString: proxyURLString)
         guard !config.isEmpty else { return nil }
         guard config.isUsable else {
-            return "需填写完整 URL,例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890"
+            return String(localized: "Enter a full URL, such as http://127.0.0.1:7890 or socks5://127.0.0.1:7890")
         }
         return nil
     }
@@ -391,7 +397,7 @@ private struct NetworkSettingsSection: View {
             Section {
                 // 手动对齐这一行,避免 LabeledContent 默认基线让 rounded TextField 视觉偏低。
                 HStack(alignment: .center, spacing: 12) {
-                    Text("代理地址")
+                    Text("Proxy")
 
                     Spacer(minLength: 12)
 
@@ -410,7 +416,7 @@ private struct NetworkSettingsSection: View {
                         .foregroundStyle(.red)
                 }
             } footer: {
-                Text("留空表示不使用代理。仅影响自动更新检查与下载。")
+                Text("Leave empty to use no proxy. Only affects checking for and downloading updates.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -442,7 +448,7 @@ private struct PromptFilterRuleEditor: View {
     var body: some View {
         HStack(spacing: 12) {
             // 匹配方式:分段控件,只有「包含 / 等于」两项
-            Picker("匹配方式", selection: $matchType) {
+            Picker("Match", selection: $matchType) {
                 ForEach(PromptFilterMatchType.allCases) { type in
                     Text(type.label).tag(type)
                 }
@@ -465,7 +471,7 @@ private struct PromptFilterRuleEditor: View {
             .buttonStyle(.borderless)
             .foregroundStyle(.blue)
             .disabled(trimmedPattern.isEmpty)
-            .help("添加过滤规则")
+            .help("Add filter rule")
         }
         .padding(12)
         .background(
@@ -479,9 +485,9 @@ private struct PromptFilterRuleEditor: View {
     private var placeholderText: String {
         switch matchType {
         case .contains:
-            return "输入要过滤的关键词..."
+            return String(localized: "Keyword to filter out…")
         case .equals:
-            return "输入要完全匹配的提示词..."
+            return String(localized: "Exact prompt to filter out…")
         }
     }
 
@@ -551,7 +557,7 @@ private struct PromptFilterRuleRow: View {
 
                 // 仅在有改动时显示保存提示
                 if hasChanges {
-                    Text("按回车保存修改")
+                    Text("Press Return to save")
                         .font(.caption2)
                         .foregroundStyle(.blue)
                 }
@@ -568,7 +574,7 @@ private struct PromptFilterRuleRow: View {
             .buttonStyle(.borderless)
             .foregroundStyle(.secondary)
             .opacity(isHovered ? 1 : 0.3)
-            .help("删除规则")
+            .help("Delete rule")
         }
         .padding(12)
         .background(

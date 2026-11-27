@@ -14,7 +14,7 @@ struct DockTabView: View {
     private var style: DockTabStyle { controller.dockTabStyle }
     private var edge: DockEdge { controller.tabEdge }
     private var title: String {
-        controller.isCovered ? "Private" : (note.title.isEmpty ? "Untitled List" : note.title)
+        controller.isCovered ? String(localized: "Private") : (note.title.isEmpty ? String(localized: "Untitled List") : note.title)
     }
 
     var body: some View {
@@ -43,10 +43,10 @@ struct DockTabView: View {
 
     private func menu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(ClosureMenuItem("Open") { controller.onTabClick?() })
-        menu.addItem(ClosureMenuItem("Undock") { controller.onToggleDock?() })
+        menu.addItem(ClosureMenuItem(String(localized: "Open")) { controller.onTabClick?() })
+        menu.addItem(ClosureMenuItem(String(localized: "Undock")) { controller.onToggleDock?() })
         menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem("Close List") { controller.requestClose() })
+        menu.addItem(ClosureMenuItem(String(localized: "Close List")) { controller.requestClose() })
         return menu
     }
 
@@ -54,7 +54,7 @@ struct DockTabView: View {
         let agentTodos = note.kind == .agentInbox ? (inbox?.snapshot.todos.count ?? 0) : 0
         let remaining = agentTodos + controller.tasks.filter { !$0.isDone }.count
         if remaining > 0 {
-            Text("\(remaining)")
+            Text(verbatim: "\(remaining)")
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 4)
