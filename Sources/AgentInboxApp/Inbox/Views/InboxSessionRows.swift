@@ -13,6 +13,9 @@ struct InboxSessionRows: View {
 
     private var snapshot: AgentSnapshot { inbox.snapshot }
 
+    /// 行的身份与顺序：待办在前、运行中在后，同一会话换区也算变化。
+    private var rowIDs: [String] { snapshot.todos.map(\.id) + ["running"] + snapshot.running.map(\.id) }
+
     var body: some View {
         if !snapshot.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
@@ -45,7 +48,9 @@ struct InboxSessionRows: View {
             .padding(.horizontal, NoteLayout.rowInset)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contextMenu { contextMenuItems }
-            .animation(.easeInOut(duration: 0.2), value: snapshot)
+            // 只在行增删、换位时动画。运行中的 agent 每一两秒就改一次快照里的时间和摘要，
+            // 用整个快照当 value 会让这些不改布局的变化也起一段动画。
+            .animation(.easeInOut(duration: 0.2), value: rowIDs)
             .onChange(of: snapshot.todos.count) { oldCount, newCount in
                 if newCount > oldCount { announce(String(localized: "New agent todo")) }
             }
@@ -164,10 +169,8 @@ private struct InboxRunningRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: "circle.dotted")
-                .font(.system(size: 16, weight: .regular))
-                .foregroundStyle(theme.secondary)
-                .symbolEffect(.pulse, options: .repeating)
+            // 不用 .symbolEffect(.pulse, options: .repeating)：SwiftUI 无限动画逐帧占主线程，见 PulsingSymbol。
+            PulsingSymbol(systemName: "circle.dotted", pointSize: 16, color: theme.secondary)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(session.projectName)
